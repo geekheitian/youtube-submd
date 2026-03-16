@@ -1,0 +1,38 @@
+# API Keys 和敏感信息 - 绝对不能提交！
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# 日志文件
+*.log
+scheduler.log
+automation.log
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 项目内部 Copilot 状态
+.claude/
+
+# 临时文件
+*.tmp
+*.temp
