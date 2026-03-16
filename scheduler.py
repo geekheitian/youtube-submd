@@ -62,12 +62,25 @@ def setup_logging() -> logging.Logger:
     return logger
 
 
+CHANNELS_CONFIG = PROJECT_DIR / "channels.yaml"
+
+
 def run_tool(logger: logging.Logger) -> None:
-    """调用主工具脚本，捕获所有错误避免守护进程崩溃"""
-    logger.info(f"开始运行: bestpartners_tool.py --limit {LIMIT}")
+    """调用主工具脚本，捕获所有错误避免守护进程崩溃。
+
+    当 channels.yaml 存在时，自动使用 --all-channels 模式处理所有已启用频道；
+    否则回退到单频道 --limit 模式（向后兼容）。
+    """
+    if CHANNELS_CONFIG.exists():
+        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--all-channels"]
+        logger.info(f"channels.yaml 存在，使用多频道模式: --all-channels")
+    else:
+        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--limit", str(LIMIT)]
+        logger.info(f"开始运行（单频道模式）: bestpartners_tool.py --limit {LIMIT}")
+
     try:
         result = subprocess.run(
-            [PYTHON_BIN, str(TOOL_SCRIPT), "--limit", str(LIMIT)],
+            cmd,
             cwd=PROJECT_DIR,
             capture_output=False,      # 让工具自己打印输出
             timeout=1800,              # 最大运行 30 分钟

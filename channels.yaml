@@ -1,0 +1,25 @@
+# YouTube 频道订阅配置
+# 使用 --all-channels 参数时，将依次处理所有 enabled: true 的频道
+#
+# 每个频道支持的配置项：
+#   name    - 显示名称（用于日志和目录命名）
+#   url     - 频道 URL（支持 @handle、/channel/、/c/、/user/ 格式）
+#   limit   - 每次最多检查的视频数（已处理的会自动跳过）
+#   enabled - true/false，false 时跳过该频道
+
+channels:
+  - name: BestPartners
+    url: https://www.youtube.com/@BestPartners/videos
+    limit: 5
+    enabled: true
+
+  # 在下面添加更多频道，例如：
+  # - name: YC Startup School
+  #   url: https://www.youtube.com/@ycombinator/videos
+  #   limit: 3
+  #   enabled: false
+
+  # - name: Andrej Karpathy
+  #   url: https://www.youtube.com/@AndrejKarpathy/videos
+  #   limit: 3
+  #   enabled: false

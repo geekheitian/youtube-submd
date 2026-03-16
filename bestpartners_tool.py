@@ -26,7 +26,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 # 配置
 DEFAULT_CHANNEL = "https://www.youtube.com/@BestPartners/videos"
@@ -171,11 +171,12 @@ class ChannelContext:
         return self.name
 
 
-def build_channel_context(channel_url: str, config: AppConfig) -> ChannelContext:
+def build_channel_context(channel_url: str, config: AppConfig, override_name: Optional[str] = None) -> ChannelContext:
     """根据频道 URL 构建频道上下文"""
+    name = override_name or get_channel_name(channel_url, default_channel_name=config.default_channel_name)
     return ChannelContext(
         url=channel_url,
-        name=get_channel_name(channel_url, default_channel_name=config.default_channel_name),
+        name=name,
         content_root=config.content_root,
     )
 
@@ -936,6 +937,158 @@ def process_video(video: Dict, context: ChannelContext, config: AppConfig, dry_r
     return True
 
 
+def load_channels_config(config_path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """从 channels.yaml 加载频道订阅列表，返回已启用的频道配置列表。
+
+    每项格式：{'name': str, 'url': str, 'limit': int, 'enabled': bool}
+    """
+    candidates = []
+    if config_path:
+        candidates.append(config_path)
+    candidates.append(Path(__file__).parent / 'channels.yaml')
+    candidates.append(Path.cwd() / 'channels.yaml')
+
+    for path in candidates:
+        if path.is_file():
+            try:
+                # 使用内置 json 解析不了 YAML，用简单的手写解析器处理基本格式
+                # 或者尝试 import yaml（可选依赖），回退到手写
+                return _parse_channels_yaml(path)
+            except Exception as e:
+                print(f"⚠️  解析 {path} 失败: {e}")
+                return []
+    return []
+
+
+def _parse_channels_yaml(path: Path) -> List[Dict[str, Any]]:
+    """简单 YAML 解析器，支持 channels.yaml 的固定格式。
+    
+    不引入外部依赖，仅处理本工具使用的 channels.yaml 结构。
+    如果安装了 PyYAML，优先使用它。
+    """
+    try:
+        import yaml
+        with path.open(encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        channels = data.get('channels', []) if data else []
+    except ImportError:
+        # 手写解析：只处理 channels.yaml 的固定缩进格式
+        channels = _parse_channels_yaml_manual(path)
+
+    result = []
+    for ch in channels:
+        if not ch or not isinstance(ch, dict):
+            continue
+        url = str(ch.get('url', '')).strip()
+        if not url:
+            continue
+        result.append({
+            'name': str(ch.get('name', '')).strip() or None,
+            'url': url,
+            'limit': int(ch.get('limit', 5)),
+            'enabled': bool(ch.get('enabled', True)),
+        })
+    return [ch for ch in result if ch['enabled']]
+
+
+def _parse_channels_yaml_manual(path: Path) -> List[Dict[str, Any]]:
+    """不依赖 PyYAML 的手写解析，仅支持 channels.yaml 的固定格式。"""
+    channels: List[Dict[str, Any]] = []
+    current: Optional[Dict[str, Any]] = None
+
+    with path.open(encoding='utf-8') as f:
+        for raw_line in f:
+            line = raw_line.rstrip()
+            stripped = line.lstrip()
+
+            # 跳过注释和空行
+            if not stripped or stripped.startswith('#'):
+                continue
+
+            # 新频道条目（以 "  - " 开头，缩进2空格）
+            if re.match(r'^\s{2}-\s', line):
+                if current is not None:
+                    channels.append(current)
+                current = {}
+                # 可能同行有 key: value（如 "  - name: Foo"）
+                inline = stripped[2:].strip()
+                if ':' in inline:
+                    k, _, v = inline.partition(':')
+                    _set_channel_field(current, k.strip(), v.strip())
+                continue
+
+            # 频道属性行（以4+空格开头）
+            if current is not None and re.match(r'^\s{4}', line) and ':' in stripped:
+                k, _, v = stripped.partition(':')
+                _set_channel_field(current, k.strip(), v.strip())
+
+    if current is not None:
+        channels.append(current)
+
+    return channels
+
+
+def _set_channel_field(ch: Dict[str, Any], key: str, raw_value: str) -> None:
+    """解析单个 YAML 字段值并写入频道字典。"""
+    v = raw_value.strip().strip('"').strip("'")
+    if key == 'enabled':
+        ch[key] = v.lower() not in ('false', '0', 'no')
+    elif key == 'limit':
+        try:
+            ch[key] = int(v)
+        except ValueError:
+            ch[key] = 5
+    else:
+        ch[key] = v
+
+
+def process_all_channels(
+    config: 'AppConfig',
+    dry_run: bool = False,
+    force: bool = False,
+    channels_file: Optional[Path] = None,
+) -> None:
+    """读取 channels.yaml，依次处理所有已启用的频道。"""
+    channels = load_channels_config(channels_file)
+
+    if not channels:
+        print("❌ channels.yaml 中没有已启用的频道，请检查配置文件。")
+        return
+
+    print(f"📋 共找到 {len(channels)} 个已启用频道")
+    print()
+
+    total_processed = 0
+    for idx, ch in enumerate(channels, 1):
+        ch_url = ch['url']
+        ch_limit = ch['limit']
+
+        context = build_channel_context(ch_url, config, override_name=ch.get('name'))
+        context.subtitles_dir.mkdir(parents=True, exist_ok=True)
+        context.summaries_dir.mkdir(parents=True, exist_ok=True)
+
+        print("=" * 50)
+        print(f"[{idx}/{len(channels)}] 📺 {context.name}")
+        print(f"    URL: {ch_url}  |  limit: {ch_limit}")
+        print("=" * 50)
+
+        videos = get_channel_videos(ch_url, ch_limit)
+        if not videos:
+            print(f"  ❌ 无法获取 {context.name} 的视频列表，跳过")
+            continue
+
+        processed = 0
+        for video in videos:
+            if process_video(video, context, config, dry_run, force):
+                processed += 1
+        total_processed += processed
+        print(f"  ✅ {context.name}：本次处理 {processed} 个视频\n")
+
+    print("=" * 50)
+    print(f"✅ 所有频道完成！本次共处理 {total_processed} 个视频")
+    print("=" * 50)
+
+
 def main():
     load_dotenv()
     config = load_config()
@@ -947,6 +1100,10 @@ def main():
     parser.add_argument("--content-subdir", help="覆盖内容子目录（默认 01-内容，可由 YTSUBMD_CONTENT_SUBDIR 设置）")
     parser.add_argument("--dry-run", action="store_true", help="预览模式，不下载字幕")
     parser.add_argument("--force", "-f", action="store_true", help="强制重新处理已存在的视频")
+    parser.add_argument("--all-channels", "-A", action="store_true",
+                        help="从 channels.yaml 读取所有已启用频道并依次处理")
+    parser.add_argument("--channels-file", type=Path, default=None,
+                        help="指定 channels.yaml 路径（默认自动查找项目根目录）")
 
     args = parser.parse_args()
 
@@ -972,6 +1129,14 @@ def main():
         )
 
     context = build_channel_context(args.channel, config)
+
+    # --all-channels：从 channels.yaml 批量处理所有已启用频道
+    if args.all_channels:
+        process_all_channels(config, dry_run=args.dry_run, force=args.force,
+                             channels_file=args.channels_file)
+        return
+
+    # 单频道模式（默认）
 
     # 确保目录存在
     context.subtitles_dir.mkdir(parents=True, exist_ok=True)
