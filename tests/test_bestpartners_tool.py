@@ -108,6 +108,38 @@ Second line
         self.assertEqual(dates['compact'], '20260315')
         self.assertEqual(dates['display'], '2026-03-15')
 
+    def test_cleanup_downloaded_subtitle_removes_temp_vtt(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subtitle_path = Path(tmpdir) / 'sample.vtt'
+            subtitle_path.write_text('WEBVTT', encoding='utf-8')
+            tool.cleanup_downloaded_subtitle(str(subtitle_path))
+            self.assertFalse(subtitle_path.exists())
+
+    def test_sanitize_summary_text_removes_prompt_leakage(self):
+        raw = """、推理过程、草稿或中间分析
+
+视频内容是关于 AI 概念的科普。
+
+让我整理笔记内容：
+
+### 核心主题
+主题内容
+
+### 关键观点
+- 观点一
+
+### 重要结论
+结论内容
+
+### 可行动点
+- 行动一
+"""
+        cleaned = tool.sanitize_summary_text(raw)
+        self.assertTrue(cleaned.startswith('### 核心主题'))
+        self.assertNotIn('推理过程、草稿或中间分析', cleaned)
+        self.assertNotIn('让我整理笔记内容', cleaned)
+        self.assertIn('### 可行动点', cleaned)
+
 
 if __name__ == '__main__':
     unittest.main()

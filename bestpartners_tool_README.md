@@ -67,7 +67,7 @@
 
 1. **MiniMax**
    - 使用 `POST /v1/chat/completions`
-   - 模型：`MiniMax-Text-01`
+   - 模型：`MiniMax-M2.5`
    - 用于生成结构化中文摘要
 
 2. **DashScope**
@@ -210,7 +210,7 @@ source: https://www.youtube.com/watch?v=<video_id>
 
 - **语言**: Python 3.11+
 - **视频获取**: `yt-dlp`
-- **AI 摘要**: MiniMax (`MiniMax-Text-01`)
+- **AI 摘要**: MiniMax (`MiniMax-M2.5`)
 - **可选 fallback**: DashScope Qwen
 - **存储**: Markdown 文件
 
@@ -222,6 +222,8 @@ source: https://www.youtube.com/watch?v=<video_id>
 2. 频道上下文已经结构化，但更进一步的配置管理仍可继续完善
 3. 字幕清洗已拆层，但“智能标点 / 语义分段”尚未单独实现为独立增强步骤
 4. 目前还没有补齐自动化测试
+5. Bilibili 不能直接复用 YouTube 主程序，需要使用独立的 `bilibili_tool.py`
+6. Bilibili 空间抓取可能受到 `352` 风控影响，正式字幕通常需要 cookies
 
 ---
 
@@ -236,3 +238,68 @@ source: https://www.youtube.com/watch?v=<video_id>
    - `--subs-only`
    - `--summary-only`
    - `--channel-name`
+
+---
+
+## 11. Bilibili 独立程序
+
+新增了独立脚本：
+
+```bash
+python3 bilibili_tool.py --space-url "https://space.bilibili.com/50247550/video"
+```
+
+常用参数：
+
+```bash
+# 只验证空间最新 3 条视频
+python3 bilibili_tool.py --limit 3 --dry-run
+
+# 从浏览器读取 cookies（推荐）
+python3 bilibili_tool.py --cookies-from-browser chrome
+
+# 或者直接指定 cookies 文件
+python3 bilibili_tool.py --cookies-file ~/Downloads/bilibili.cookies.txt
+```
+
+建议的环境变量：
+
+- `BILISUBMD_DEFAULT_SPACE_URL`
+- `BILISUBMD_DEFAULT_SPACE_NAME`
+- `BILISUBMD_DEFAULT_LIMIT`
+- `BILISUBMD_COOKIES_FILE`
+- `BILISUBMD_COOKIES_FROM_BROWSER`
+
+---
+
+## 12. 统一订阅入口
+
+当前推荐使用统一入口管理多平台订阅：
+
+```bash
+python3 subscription_runner.py --all-subscriptions
+```
+
+统一配置文件：
+
+```text
+subscriptions.yaml
+```
+
+当前支持：
+
+- `youtube`
+- `bilibili`
+- `douyin`（当前只预留骨架）
+
+状态查看：
+
+```bash
+python3 status_view.py
+python3 status_view.py --write-html
+```
+
+会读取或生成：
+
+- `status.json`
+- `status.html`

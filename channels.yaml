@@ -13,6 +13,11 @@ channels:
     limit: 5
     enabled: true
 
+  - name: 马克的技术工作坊
+    url: https://www.youtube.com/@马克的技术工作坊/videos
+    limit: 3
+    enabled: true
+
   # 在下面添加更多频道，例如：
   # - name: YC Startup School
   #   url: https://www.youtube.com/@ycombinator/videos

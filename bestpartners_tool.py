@@ -377,6 +377,14 @@ def prepare_subtitle_text(subtitle_path: str, max_chars: int = 500000) -> str:
     return build_subtitle_text(text_lines, max_chars=max_chars)
 
 
+def cleanup_downloaded_subtitle(subtitle_path: str) -> None:
+    """删除仅用于中间处理的原始字幕文件，避免在 Obsidian 目录残留 .vtt。"""
+    try:
+        Path(subtitle_path).unlink(missing_ok=True)
+    except OSError as error:
+        print(f"   ⚠️ 清理原始字幕失败: {error}")
+
+
 def read_subtitle(subtitle_path: str, max_chars: int = 500000) -> str:
     """兼容入口：读取并清洗字幕内容"""
     subtitle_text = prepare_subtitle_text(subtitle_path, max_chars=max_chars)
@@ -475,6 +483,35 @@ tags:
 def strip_reasoning_markup(text: str) -> str:
     """移除模型返回中的推理片段"""
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+
+
+def sanitize_summary_text(summary_text: str) -> str:
+    """清理模型摘要输出中的提示词泄漏、前言和多余空行。"""
+    cleaned = strip_reasoning_markup(summary_text).replace('\r\n', '\n').strip()
+
+    first_heading = cleaned.find("### 核心主题")
+    if first_heading > 0:
+        cleaned = cleaned[first_heading:]
+
+    leaked_line_patterns = (
+        r'^(?:、)?推理过程、草稿或中间分析\s*$',
+        r'^让我整理笔记内容[:：]?\s*$',
+        r'^请生成结构化摘要[:：]?\s*$',
+        r'^输出要求[:：]?\s*$',
+    )
+
+    kept_lines: List[str] = []
+    for line in cleaned.split('\n'):
+        stripped = line.strip()
+        if stripped == "## 结构化摘要":
+            continue
+        if any(re.fullmatch(pattern, stripped) for pattern in leaked_line_patterns):
+            continue
+        kept_lines.append(line.rstrip())
+
+    cleaned = '\n'.join(kept_lines).strip()
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned
 
 
 def split_text_for_model(text: str, max_chars: int = 1800) -> List[str]:
@@ -710,6 +747,11 @@ def generate_summary_with_minimax(title: str, subtitle_text: str, config: AppCon
     if not summary_text:
         return None
 
+    summary_text = sanitize_summary_text(summary_text)
+    if not summary_text:
+        print("   ⚠️ MiniMax 返回的摘要清洗后为空")
+        return None
+
     print(f"   🤖 已使用 {config.minimax_model} 生成摘要")
     return summary_text
 
@@ -773,6 +815,11 @@ def generate_summary_with_dashscope(subtitle_text: str) -> Optional[str]:
     summary_text = summary_text.strip()
     if not summary_text:
         print("   ⚠️ DashScope 返回的摘要为空")
+        return None
+
+    summary_text = sanitize_summary_text(summary_text)
+    if not summary_text:
+        print("   ⚠️ DashScope 返回的摘要清洗后为空")
         return None
 
     print("   🤖 已使用 DashScope 生成摘要")
@@ -917,7 +964,11 @@ def process_video(video: Dict, context: ChannelContext, config: AppConfig, dry_r
         return False
 
     # 字幕清洗阶段：读取 VTT 并生成基础清洗文本
-    subtitle_text = prepare_subtitle_text(subtitle_path)
+    try:
+        subtitle_text = prepare_subtitle_text(subtitle_path)
+    finally:
+        cleanup_downloaded_subtitle(subtitle_path)
+
     if not subtitle_text:
         print(f"   ❌ 字幕清洗失败")
         return False
