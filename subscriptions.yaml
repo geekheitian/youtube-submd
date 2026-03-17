@@ -1,0 +1,29 @@
+# 统一订阅配置
+# platform: youtube | bilibili | douyin
+
+subscriptions:
+  - platform: youtube
+    name: BestPartners
+    url: https://www.youtube.com/@BestPartners/videos
+    limit: 5
+    enabled: true
+
+  - platform: youtube
+    name: 马克的技术工作坊
+    url: https://www.youtube.com/@马克的技术工作坊/videos
+    limit: 3
+    enabled: true
+
+  - platform: bilibili
+    name: 清华姜学长
+    url: https://space.bilibili.com/50247550/video
+    limit: 3
+    enabled: false
+    # cookies_from_browser: chrome
+    # cookies_file: /path/to/bilibili.cookies.txt
+
+  - platform: douyin
+    name: 抖音精选
+    url: https://www.douyin.com/
+    limit: 3
+    enabled: false

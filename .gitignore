@@ -18,6 +18,8 @@ venv/
 *.log
 scheduler.log
 automation.log
+status.json
+status.html
 
 # macOS
 .DS_Store

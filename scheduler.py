@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-BestPartners 定时调度 Agent
+youtube-submd 定时调度 Agent
 
-作为守护进程持续运行，按设定时间自动调用 bestpartners_tool.py。
+作为守护进程持续运行，按设定时间自动调用统一订阅入口。
 可通过以下方式使用：
   - 手动运行：python3 scheduler.py
   - 后台运行：python3 scheduler.py &
@@ -36,7 +36,7 @@ RUN_ON_START = True
 
 PROJECT_DIR = Path(__file__).parent.resolve()
 LOG_FILE = PROJECT_DIR / "scheduler.log"
-TOOL_SCRIPT = PROJECT_DIR / "bestpartners_tool.py"
+TOOL_SCRIPT = PROJECT_DIR / "subscription_runner.py"
 PYTHON_BIN = sys.executable
 
 
@@ -62,21 +62,17 @@ def setup_logging() -> logging.Logger:
     return logger
 
 
-CHANNELS_CONFIG = PROJECT_DIR / "channels.yaml"
+SUBSCRIPTIONS_CONFIG = PROJECT_DIR / "subscriptions.yaml"
 
 
 def run_tool(logger: logging.Logger) -> None:
-    """调用主工具脚本，捕获所有错误避免守护进程崩溃。
-
-    当 channels.yaml 存在时，自动使用 --all-channels 模式处理所有已启用频道；
-    否则回退到单频道 --limit 模式（向后兼容）。
-    """
-    if CHANNELS_CONFIG.exists():
-        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--all-channels"]
-        logger.info(f"channels.yaml 存在，使用多频道模式: --all-channels")
+    """调用统一入口脚本，捕获所有错误避免守护进程崩溃。"""
+    if SUBSCRIPTIONS_CONFIG.exists():
+        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--all-subscriptions"]
+        logger.info("subscriptions.yaml 存在，使用统一订阅模式: --all-subscriptions")
     else:
-        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--limit", str(LIMIT)]
-        logger.info(f"开始运行（单频道模式）: bestpartners_tool.py --limit {LIMIT}")
+        cmd = [PYTHON_BIN, str(TOOL_SCRIPT), "--all-subscriptions"]
+        logger.info("未找到 subscriptions.yaml，仍尝试使用统一订阅入口")
 
     try:
         result = subprocess.run(
@@ -109,11 +105,11 @@ def parse_run_time(time_str: str) -> tuple[int, int]:
 def main() -> None:
     logger = setup_logging()
     logger.info("=" * 50)
-    logger.info("BestPartners 调度 Agent 启动")
+    logger.info("youtube-submd 调度 Agent 启动")
     logger.info(f"Python: {PYTHON_BIN}")
     logger.info(f"工具路径: {TOOL_SCRIPT}")
     logger.info(f"每日运行时间: {RUN_TIME}")
-    logger.info(f"每次处理视频数: {LIMIT}")
+    logger.info(f"默认处理视频数: {LIMIT}")
     logger.info("=" * 50)
 
     if not TOOL_SCRIPT.exists():
