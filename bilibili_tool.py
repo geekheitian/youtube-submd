@@ -629,7 +629,13 @@ def generate_summary(
     return generate_basic_summary(title, video_url, video_id, subtitle_text, context, publish_dates)
 
 
-def save_summary(title: str, content: str, context: shared.ChannelContext, publish_dates: Dict[str, str]) -> str:
+def save_summary(
+    title: str,
+    content: str,
+    context: shared.ChannelContext,
+    publish_dates: Dict[str, str],
+    existing_summary: Optional[Path] = None,
+) -> str:
     """保存摘要文件。"""
     filename = f"{shared.sanitize_filename(title)}-{publish_dates['compact']}.md"
     filepath = context.summaries_dir / filename
@@ -638,6 +644,13 @@ def save_summary(title: str, content: str, context: shared.ChannelContext, publi
     except OSError as error:
         print(f"   ❌ 保存失败: {error}")
         return ""
+
+    if existing_summary and existing_summary != filepath and existing_summary.exists():
+        try:
+            existing_summary.unlink()
+            print(f"   🧹 已清理旧摘要文件: {existing_summary.name}")
+        except OSError as error:
+            print(f"   ⚠️ 清理旧摘要文件失败: {existing_summary.name} - {error}")
 
     print(f"   ✅ 摘要已保存: {filename}")
     return str(filepath)
@@ -704,7 +717,7 @@ def process_video(
     convert_subtitle_to_md(video_url, chinese_title, formatted_subtitle_text, lang, context, publish_dates)
 
     summary = generate_summary(chinese_title, video_url, video_id, formatted_subtitle_text, context, config, publish_dates)
-    save_summary(chinese_title, summary, context, publish_dates)
+    save_summary(chinese_title, summary, context, publish_dates, existing_summary=existing_summary)
     return True
 
 

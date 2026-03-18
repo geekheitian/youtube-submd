@@ -67,6 +67,41 @@ class BilibiliToolTests(unittest.TestCase):
             match = tool.find_existing_summary("https://www.bilibili.com/video/BV1UKZtBNE42", context)
             self.assertEqual(match, summary_path)
 
+    def test_save_summary_removes_old_noncanonical_file_on_force_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = tool.load_config()
+            config = config.__class__(
+                base_dir=Path(tmpdir),
+                content_subdir=config.content_subdir,
+                default_channel_url=config.default_channel_url,
+                default_channel_name=config.default_channel_name,
+                default_limit=config.default_limit,
+                minimax_base_url=config.minimax_base_url,
+                minimax_model=config.minimax_model,
+            )
+            context = tool.build_space_context("https://space.bilibili.com/513194466/video", config)
+            context.summaries_dir.mkdir(parents=True, exist_ok=True)
+
+            old_path = context.summaries_dir / "旧命名.md"
+            old_path.write_text(
+                "---\nsource: https://www.bilibili.com/video/BV1UKZtBNE42\n---\n",
+                encoding="utf-8",
+            )
+
+            publish_dates = {"compact": "20260317", "display": "2026-03-17"}
+            saved_path = tool.save_summary(
+                "测试标题",
+                "content",
+                context,
+                publish_dates,
+                existing_summary=old_path,
+            )
+
+            expected_path = context.summaries_dir / "测试标题-20260317.md"
+            self.assertEqual(Path(saved_path), expected_path)
+            self.assertTrue(expected_path.exists())
+            self.assertFalse(old_path.exists())
+
     def test_convert_raw_cookie_header_to_netscape(self):
         converted = tool.convert_raw_cookie_header_to_netscape("SESSDATA=abc; bili_jct=def")
         self.assertIn("# Netscape HTTP Cookie File", converted)
