@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import json
+import time
 import argparse
 import subprocess
 import urllib.error
@@ -26,7 +27,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 # 配置
 DEFAULT_CHANNEL = "https://www.youtube.com/@BestPartners/videos"
@@ -171,6 +172,14 @@ class ChannelContext:
         return self.name
 
 
+@dataclass(frozen=True)
+class SubtitleOption:
+    """表示一个可下载的字幕选项。"""
+
+    code: str
+    is_auto: bool = False
+
+
 def build_channel_context(channel_url: str, config: AppConfig, override_name: Optional[str] = None) -> ChannelContext:
     """根据频道 URL 构建频道上下文"""
     name = override_name or get_channel_name(channel_url, default_channel_name=config.default_channel_name)
@@ -217,6 +226,15 @@ def run_command(cmd: List[str], capture: bool = True) -> str:
     except Exception as e:
         print(f"执行错误: {e}")
         return ""
+
+
+def build_cookie_args(cookies_file: Optional[str], cookies_from_browser: Optional[str]) -> List[str]:
+    """为 yt-dlp 构建 cookies 参数。"""
+    if cookies_file:
+        return ["--cookies", str(Path(cookies_file).expanduser())]
+    if cookies_from_browser:
+        return ["--cookies-from-browser", cookies_from_browser]
+    return []
 
 
 def translate_to_chinese(title: str) -> str:
@@ -266,12 +284,18 @@ def translate_to_chinese(title: str) -> str:
     return title
 
 
-def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict]:
+def get_channel_videos(
+    channel_url: str,
+    limit: int = 10,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+) -> List[Dict]:
     """获取频道最新视频列表"""
     print(f"📺 获取频道最新视频: {channel_url}")
 
     cmd = [
         "yt-dlp",
+        *build_cookie_args(cookies_file, cookies_from_browser),
         "--flat-playlist",
         "--print", "%(title)s|%(id)s|%(upload_date)s",
         channel_url
@@ -300,41 +324,120 @@ def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict]:
     return videos
 
 
-def get_available_subtitles(video_id: str) -> List[str]:
-    """检查可用的字幕"""
-    cmd = ["yt-dlp", "--list-subs", f"https://www.youtube.com/watch?v={video_id}"]
-    output = run_command(cmd)
+def parse_available_subtitles(output: str) -> List[SubtitleOption]:
+    """解析 yt-dlp --list-subs 输出中的字幕选项。"""
+    options: List[SubtitleOption] = []
+    current_section: Optional[str] = None
+    in_table = False
 
-    subtitles = []
-    # 查找中文字幕
-    if "zh-Hans" in output:
-        subtitles.append("zh-Hans")
-    if "zh-Hant" in output:
-        subtitles.append("zh-Hant")
-    if "en-" in output:
-        subtitles.append("en")
+    for raw_line in output.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("[info] Available subtitles"):
+            current_section = "manual"
+            in_table = False
+            continue
+        if stripped.startswith("[info] Available automatic captions"):
+            current_section = "auto"
+            in_table = False
+            continue
+        if current_section and stripped.startswith("Language"):
+            in_table = True
+            continue
+        if not current_section or not in_table or stripped.startswith("["):
+            continue
 
-    return subtitles
+        code = stripped.split()[0]
+        option = SubtitleOption(code=code, is_auto=(current_section == "auto"))
+        if option not in options:
+            options.append(option)
+
+    return options
 
 
-def download_subtitle(video_id: str, context: ChannelContext, lang: str = "zh-Hans") -> Optional[str]:
-    """下载字幕"""
-    print(f"   ⬇️ 下载字幕: {lang}")
-
+def get_available_subtitles(
+    video_id: str,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+) -> List[SubtitleOption]:
+    """检查可用的字幕。"""
     cmd = [
         "yt-dlp",
-        "--write-subs",
-        "--sub-lang", lang,
-        "--skip-download",
-        "-o", str(context.subtitles_dir / f"{video_id}"),
-        f"https://www.youtube.com/watch?v={video_id}"
+        *build_cookie_args(cookies_file, cookies_from_browser),
+        "--list-subs",
+        f"https://www.youtube.com/watch?v={video_id}",
     ]
-
     output = run_command(cmd)
-    if output and "Writing video subtitles" in output:
-        # 找到下载的文件
-        for f in context.subtitles_dir.glob(f"{video_id}.*.vtt"):
-            return str(f)
+    if not output:
+        return []
+    return parse_available_subtitles(output)
+
+
+def choose_subtitle_option(options: List[SubtitleOption]) -> Optional[SubtitleOption]:
+    """从可用字幕中选择最佳项。"""
+    preferred_prefixes = ("zh-Hans", "zh-Hant", "en")
+
+    def sort_key(option: SubtitleOption) -> Tuple[int, int, int]:
+        for index, prefix in enumerate(preferred_prefixes):
+            if option.code == prefix:
+                return (index, 0, 1 if option.is_auto else 0)
+            if option.code.startswith(f"{prefix}-"):
+                return (index, 1, 1 if option.is_auto else 0)
+        return (len(preferred_prefixes), 99, 1 if option.is_auto else 0)
+
+    available = sorted(options, key=sort_key)
+    return available[0] if available else None
+
+
+def download_subtitle(
+    video_id: str,
+    context: ChannelContext,
+    option: SubtitleOption,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+    retries: int = 2,
+) -> Optional[str]:
+    """下载字幕，支持自动字幕和轻量重试。"""
+    print(f"   ⬇️ 下载字幕: {option.code}")
+
+    for attempt in range(retries + 1):
+        cmd = [
+            "yt-dlp",
+            *build_cookie_args(cookies_file, cookies_from_browser),
+            "--write-auto-subs" if option.is_auto else "--write-subs",
+            "--sub-lang", option.code,
+            "--skip-download",
+            "-o", str(context.subtitles_dir / f"{video_id}"),
+            f"https://www.youtube.com/watch?v={video_id}"
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"   ⚠️ 字幕下载超时（第 {attempt + 1} 次）")
+            continue
+        except Exception as error:
+            print(f"   ⚠️ 字幕下载异常: {error}")
+            return None
+
+        output = f"{result.stdout}\n{result.stderr}"
+        if result.returncode == 0 and "Writing video subtitles" in output:
+            for f in context.subtitles_dir.glob(f"{video_id}.*.vtt"):
+                return str(f)
+
+        if "HTTP Error 429" in output and attempt < retries:
+            wait_seconds = attempt + 2
+            print(f"   ⚠️ YouTube 限流（429），{wait_seconds} 秒后重试")
+            time.sleep(wait_seconds)
+            continue
+
+        break
 
     return None
 
@@ -920,7 +1023,15 @@ def save_summary(title: str, video_id: str, content: str, context: ChannelContex
         return ""
 
 
-def process_video(video: Dict, context: ChannelContext, config: AppConfig, dry_run: bool = False, force: bool = False) -> bool:
+def process_video(
+    video: Dict,
+    context: ChannelContext,
+    config: AppConfig,
+    dry_run: bool = False,
+    force: bool = False,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+) -> bool:
     """处理单个视频"""
     video_id = video['id']
     title = video['title']
@@ -944,21 +1055,29 @@ def process_video(video: Dict, context: ChannelContext, config: AppConfig, dry_r
         print(f"   ♻️ 已存在，按 --force 重新处理: {existing_summary.name}")
 
     # 获取可用字幕
-    subtitles = get_available_subtitles(video_id)
-    if not subtitles:
+    subtitle_options = get_available_subtitles(video_id, cookies_file, cookies_from_browser)
+    if not subtitle_options:
         print(f"   ⚠️ 无可用字幕")
         return False
 
-    # 选择字幕语言
-    lang = "zh-Hans" if "zh-Hans" in subtitles else subtitles[0]
-    print(f"   使用字幕: {lang}")
+    subtitle_option = choose_subtitle_option(subtitle_options)
+    if not subtitle_option:
+        print(f"   ⚠️ 无可用字幕")
+        return False
+    print(f"   使用字幕: {subtitle_option.code}")
 
     if dry_run:
         print(f"   🔍 预览模式，跳过下载")
         return True
 
     # 下载字幕
-    subtitle_path = download_subtitle(video_id, context, lang)
+    subtitle_path = download_subtitle(
+        video_id,
+        context,
+        subtitle_option,
+        cookies_file=cookies_file,
+        cookies_from_browser=cookies_from_browser,
+    )
     if not subtitle_path:
         print(f"   ❌ 字幕下载失败")
         return False
@@ -977,7 +1096,7 @@ def process_video(video: Dict, context: ChannelContext, config: AppConfig, dry_r
     formatted_subtitle_text = enhance_subtitle_text(chinese_title, subtitle_text, config)
 
     # 字幕输出阶段：将增强后的文本保存为 Markdown
-    convert_subtitle_to_md(video_id, chinese_title, formatted_subtitle_text, lang, context, publish_dates)
+    convert_subtitle_to_md(video_id, chinese_title, formatted_subtitle_text, subtitle_option.code, context, publish_dates)
 
     # 生成摘要（使用增强后的字幕文本）
     summary = generate_summary(chinese_title, video_id, formatted_subtitle_text, context, config, publish_dates)
@@ -1098,6 +1217,8 @@ def process_all_channels(
     dry_run: bool = False,
     force: bool = False,
     channels_file: Optional[Path] = None,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
 ) -> None:
     """读取 channels.yaml，依次处理所有已启用的频道。"""
     channels = load_channels_config(channels_file)
@@ -1123,14 +1244,22 @@ def process_all_channels(
         print(f"    URL: {ch_url}  |  limit: {ch_limit}")
         print("=" * 50)
 
-        videos = get_channel_videos(ch_url, ch_limit)
+        videos = get_channel_videos(ch_url, ch_limit, cookies_file, cookies_from_browser)
         if not videos:
             print(f"  ❌ 无法获取 {context.name} 的视频列表，跳过")
             continue
 
         processed = 0
         for video in videos:
-            if process_video(video, context, config, dry_run, force):
+            if process_video(
+                video,
+                context,
+                config,
+                dry_run,
+                force,
+                cookies_file=cookies_file,
+                cookies_from_browser=cookies_from_browser,
+            ):
                 processed += 1
         total_processed += processed
         print(f"  ✅ {context.name}：本次处理 {processed} 个视频\n")
@@ -1155,6 +1284,8 @@ def main():
                         help="从 channels.yaml 读取所有已启用频道并依次处理")
     parser.add_argument("--channels-file", type=Path, default=None,
                         help="指定 channels.yaml 路径（默认自动查找项目根目录）")
+    parser.add_argument("--cookies-file", help="YouTube cookies 文件路径")
+    parser.add_argument("--cookies-from-browser", help="从浏览器读取 cookies，例如 chrome、safari")
 
     args = parser.parse_args()
 
@@ -1179,12 +1310,23 @@ def main():
             minimax_model=config.minimax_model,
         )
 
+    cookies_file = args.cookies_file or os.environ.get("YTSUBMD_COOKIES_FILE", "").strip() or None
+    cookies_from_browser = (
+        args.cookies_from_browser or os.environ.get("YTSUBMD_COOKIES_FROM_BROWSER", "").strip() or None
+    )
+
     context = build_channel_context(args.channel, config)
 
     # --all-channels：从 channels.yaml 批量处理所有已启用频道
     if args.all_channels:
-        process_all_channels(config, dry_run=args.dry_run, force=args.force,
-                             channels_file=args.channels_file)
+        process_all_channels(
+            config,
+            dry_run=args.dry_run,
+            force=args.force,
+            channels_file=args.channels_file,
+            cookies_file=cookies_file,
+            cookies_from_browser=cookies_from_browser,
+        )
         return
 
     # 单频道模式（默认）
@@ -1198,7 +1340,7 @@ def main():
     print("=" * 50)
 
     # 获取视频列表
-    videos = get_channel_videos(args.channel, args.limit)
+    videos = get_channel_videos(args.channel, args.limit, cookies_file, cookies_from_browser)
 
     if not videos:
         print("❌ 无法获取视频列表")
@@ -1207,7 +1349,15 @@ def main():
     # 处理视频
     processed = 0
     for video in videos:
-        if process_video(video, context, config, args.dry_run, args.force):
+        if process_video(
+            video,
+            context,
+            config,
+            args.dry_run,
+            args.force,
+            cookies_file=cookies_file,
+            cookies_from_browser=cookies_from_browser,
+        ):
             processed += 1
 
     print("\n" + "=" * 50)

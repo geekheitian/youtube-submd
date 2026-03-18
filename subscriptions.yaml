@@ -14,12 +14,33 @@ subscriptions:
     limit: 3
     enabled: true
 
+  - platform: youtube
+    name: 范凯说AI
+    url: https://www.youtube.com/@fankaishuoai/videos
+    limit: 20
+    enabled: true
+    cookies_from_browser: chrome
+
+  - platform: youtube
+    name: 技术爬爬虾
+    url: https://www.youtube.com/@tech-shrimp/videos
+    limit: 3
+    enabled: true
+
   - platform: bilibili
     name: 清华姜学长
     url: https://space.bilibili.com/50247550/video
+    limit: 20
+    enabled: true
+    cookies_from_browser: chrome
+    # cookies_file: /path/to/bilibili.cookies.txt
+
+  - platform: bilibili
+    name: 飞天闪客
+    url: https://space.bilibili.com/325864133/video
     limit: 3
-    enabled: false
-    # cookies_from_browser: chrome
+    enabled: true
+    cookies_from_browser: chrome
     # cookies_file: /path/to/bilibili.cookies.txt
 
   - platform: douyin

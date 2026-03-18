@@ -30,6 +30,26 @@ class SubscriptionsTests(unittest.TestCase):
             self.assertEqual(items[0].platform, 'youtube')
             self.assertEqual(items[0].name, 'Foo')
 
+    def test_manual_loader_reads_youtube_cookies_settings(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / 'subscriptions.yaml'
+            config_path.write_text(
+                """subscriptions:
+  - platform: youtube
+    name: Foo
+    url: https://www.youtube.com/@foo/videos
+    limit: 3
+    enabled: true
+    cookies_from_browser: chrome
+    cookies_file: ~/Downloads/youtube.cookies.txt
+""",
+                encoding='utf-8',
+            )
+            items = subscriptions.load_subscriptions(config_path)
+            self.assertEqual(len(items), 1)
+            self.assertEqual(items[0].cookies_from_browser, 'chrome')
+            self.assertEqual(items[0].cookies_file, '~/Downloads/youtube.cookies.txt')
+
     def test_status_html_contains_subscription_name(self):
         html = subscription_status.render_status_html(
             {

@@ -39,7 +39,12 @@ class YoutubeAdapter:
         return youtube_tool.build_channel_context(subscription.url, config, override_name=subscription.name)
 
     def list_videos(self, subscription: Subscription, config: youtube_tool.AppConfig) -> List[Dict[str, str]]:
-        return youtube_tool.get_channel_videos(subscription.url, subscription.limit)
+        return youtube_tool.get_channel_videos(
+            subscription.url,
+            subscription.limit,
+            subscription.cookies_file,
+            subscription.cookies_from_browser,
+        )
 
     def process_video(
         self,
@@ -50,7 +55,15 @@ class YoutubeAdapter:
         dry_run: bool,
         force: bool,
     ) -> bool:
-        return youtube_tool.process_video(video, context, config, dry_run=dry_run, force=force)
+        return youtube_tool.process_video(
+            video,
+            context,
+            config,
+            dry_run=dry_run,
+            force=force,
+            cookies_file=subscription.cookies_file,
+            cookies_from_browser=subscription.cookies_from_browser,
+        )
 
     def find_existing_summary(
         self,
