@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import bilibili_tool as tool
 
@@ -111,6 +112,61 @@ class BilibiliToolTests(unittest.TestCase):
     def test_is_raw_cookie_header_detects_single_line_cookie(self):
         self.assertTrue(tool.is_raw_cookie_header("SESSDATA=abc; bili_jct=def"))
         self.assertFalse(tool.is_raw_cookie_header("# Netscape HTTP Cookie File\n.example.com\tTRUE"))
+
+    @mock.patch('bilibili_tool.save_summary')
+    @mock.patch('bilibili_tool.generate_summary', return_value='summary')
+    @mock.patch('bilibili_tool.convert_subtitle_to_md', return_value='/tmp/asr-subtitle.md')
+    @mock.patch('bilibili_tool.shared.enhance_subtitle_text', return_value='整理后的字幕')
+    @mock.patch('bilibili_tool.shared.correct_asr_text', return_value='校对后的字幕')
+    @mock.patch('bilibili_tool.transcribe_video_with_asr', return_value='原始转写')
+    @mock.patch('bilibili_tool.get_available_subtitles', return_value=[])
+    def test_process_video_uses_asr_fallback_when_no_subtitles(
+        self,
+        mock_get_subtitles,
+        mock_transcribe,
+        mock_correct,
+        mock_enhance,
+        mock_convert,
+        mock_generate,
+        mock_save,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = tool.load_config()
+            config = config.__class__(
+                base_dir=Path(tmpdir),
+                content_subdir=config.content_subdir,
+                default_channel_url=config.default_channel_url,
+                default_channel_name=config.default_channel_name,
+                default_limit=config.default_limit,
+                minimax_base_url=config.minimax_base_url,
+                minimax_model=config.minimax_model,
+            )
+            context = tool.build_space_context("https://space.bilibili.com/513194466/video", config)
+            context.subtitles_dir.mkdir(parents=True, exist_ok=True)
+            context.summaries_dir.mkdir(parents=True, exist_ok=True)
+
+            success = tool.process_video(
+                {'id': 'BVTEST123', 'title': '测试标题', 'upload_date': '20260320'},
+                context,
+                config,
+                cookies_file=None,
+                cookies_from_browser='chrome',
+            )
+
+        self.assertTrue(success)
+        mock_get_subtitles.assert_called_once()
+        mock_transcribe.assert_called_once_with(
+            'https://www.bilibili.com/video/BVTEST123',
+            'BVTEST123',
+            None,
+            'chrome',
+        )
+        mock_correct.assert_called_once()
+        mock_enhance.assert_called_once_with('测试标题', '校对后的字幕', config)
+        mock_convert.assert_called_once()
+        self.assertEqual(mock_convert.call_args.args[3], 'asr-zh')
+        mock_generate.assert_called_once()
+        mock_save.assert_called_once()
 
 
 if __name__ == "__main__":

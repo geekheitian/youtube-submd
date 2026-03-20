@@ -7,6 +7,7 @@ subscriptions:
     url: https://www.youtube.com/@BestPartners/videos
     limit: 5
     enabled: true
+    subtitle_strategy: native
 
   - platform: youtube
     name: 马克的技术工作坊
@@ -26,6 +27,24 @@ subscriptions:
     url: https://www.youtube.com/@tech-shrimp/videos
     limit: 3
     enabled: true
+    subtitle_strategy: asr_fallback
+    glossary:
+      preferred_terms:
+        - 技术爬爬虾
+        - OpenAI
+        - Claude
+        - GPT
+        - API
+        - Agent
+      alias_map:
+        Open AI: OpenAI
+        G P T: GPT
+        A P I: API
+      keep_original:
+        - OpenAI
+        - Claude
+        - GPT
+        - API
 
   - platform: bilibili
     name: 清华姜学长

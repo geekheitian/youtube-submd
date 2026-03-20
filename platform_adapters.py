@@ -55,6 +55,17 @@ class YoutubeAdapter:
         dry_run: bool,
         force: bool,
     ) -> bool:
+        if subscription.subtitle_strategy == 'asr_fallback':
+            return youtube_tool.process_video_with_asr_fallback(
+                video,
+                context,
+                config,
+                dry_run=dry_run,
+                force=force,
+                glossary=subscription.glossary,
+                cookies_file=subscription.cookies_file,
+                cookies_from_browser=subscription.cookies_from_browser,
+            )
         return youtube_tool.process_video(
             video,
             context,

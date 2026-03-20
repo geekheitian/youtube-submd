@@ -1,9 +1,13 @@
+import json
+import subprocess
 import tempfile
+import urllib.error
 import unittest
 from unittest import mock
 from pathlib import Path
 
 import bestpartners_tool as tool
+from subscriptions import Glossary
 
 
 class BestPartnersToolTests(unittest.TestCase):
@@ -116,6 +120,23 @@ en English vtt
             self.assertEqual(match, summary_path)
             self.assertIsNone(missing)
 
+    def test_find_existing_subtitle_matches_source_metadata(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self.make_config(Path(tmpdir))
+            context = tool.build_channel_context('https://www.youtube.com/@BestPartners/videos', config)
+            context.subtitles_dir.mkdir(parents=True, exist_ok=True)
+            subtitle_path = context.subtitles_dir / 'existing.md'
+            subtitle_path.write_text(
+                '---\nsource: https://www.youtube.com/watch?v=video123\n---\n',
+                encoding='utf-8',
+            )
+
+            match = tool.find_existing_subtitle('video123', context)
+            missing = tool.find_existing_subtitle('video999', context)
+
+            self.assertEqual(match, subtitle_path)
+            self.assertIsNone(missing)
+
     def test_build_summary_markdown_includes_channel_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             config = self.make_config(Path(tmpdir))
@@ -147,6 +168,51 @@ en English vtt
             subtitle_path.write_text('WEBVTT', encoding='utf-8')
             tool.cleanup_downloaded_subtitle(str(subtitle_path))
             self.assertFalse(subtitle_path.exists())
+
+    def test_convert_subtitle_to_md_removes_old_noncanonical_file_on_force_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self.make_config(Path(tmpdir))
+            context = tool.build_channel_context('https://www.youtube.com/@BestPartners/videos', config)
+            context.subtitles_dir.mkdir(parents=True, exist_ok=True)
+            old_path = context.subtitles_dir / '旧字幕.md'
+            old_path.write_text('old', encoding='utf-8')
+
+            publish_dates = tool.get_video_dates('20260318')
+            saved_path = tool.convert_subtitle_to_md(
+                video_id='abc123',
+                title='测试标题',
+                subtitle_text='字幕内容',
+                lang='asr-zh',
+                context=context,
+                publish_dates=publish_dates,
+                existing_subtitle=old_path,
+            )
+
+            self.assertFalse(old_path.exists())
+            self.assertTrue(Path(saved_path).exists())
+            self.assertTrue(saved_path.endswith('测试标题-20260318-字幕.md'))
+
+    def test_save_summary_removes_old_noncanonical_file_on_force_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self.make_config(Path(tmpdir))
+            context = tool.build_channel_context('https://www.youtube.com/@BestPartners/videos', config)
+            context.summaries_dir.mkdir(parents=True, exist_ok=True)
+            old_path = context.summaries_dir / '旧摘要.md'
+            old_path.write_text('old', encoding='utf-8')
+
+            publish_dates = tool.get_video_dates('20260318')
+            saved_path = tool.save_summary(
+                title='测试标题',
+                video_id='abc123',
+                content='摘要内容',
+                context=context,
+                publish_dates=publish_dates,
+                existing_summary=old_path,
+            )
+
+            self.assertFalse(old_path.exists())
+            self.assertTrue(Path(saved_path).exists())
+            self.assertTrue(saved_path.endswith('测试标题-20260318.md'))
 
     def test_sanitize_summary_text_removes_prompt_leakage(self):
         raw = """、推理过程、草稿或中间分析
@@ -201,6 +267,201 @@ en English vtt
             self.assertTrue(subtitle_path.endswith('abc.zh-Hans-zh.vtt'))
             self.assertEqual(mock_run.call_args_list[0].args[0][1], '--write-auto-subs')
             self.assertEqual(mock_run.call_count, 2)
+
+    @mock.patch('bestpartners_tool.call_minimax')
+    def test_correct_asr_text_includes_glossary_hint(self, mock_call_minimax):
+        mock_call_minimax.return_value = '纠错后的文本'
+        glossary = Glossary(
+            preferred_terms=['OpenAI'],
+            alias_map={'Open AI': 'OpenAI'},
+            keep_original=['OpenAI'],
+        )
+        corrected = tool.correct_asr_text('测试标题', 'Open AI 发布了新模型', self.make_config(Path('/tmp')), glossary)
+        self.assertEqual(corrected, '纠错后的文本')
+        prompt = mock_call_minimax.call_args.kwargs['prompt']
+        self.assertIn('术语提示：', prompt)
+        self.assertIn('Open AI -> OpenAI', prompt)
+
+    def test_preserves_enough_content_rejects_overcompressed_enhancement(self):
+        original = '这是一个很长的原始字幕片段' * 20
+        shortened = '这是一个很短的结果'
+        self.assertFalse(tool.preserves_enough_content(original, shortened))
+        self.assertTrue(tool.preserves_enough_content(original, original))
+
+    @mock.patch('bestpartners_tool.urllib.request.urlopen')
+    def test_can_reach_youtube_returns_true_on_success(self, mock_urlopen):
+        mock_response = mock.MagicMock()
+        mock_response.status = 200
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+        self.assertTrue(tool.can_reach_youtube(timeout_seconds=1))
+
+    @mock.patch('bestpartners_tool.urllib.request.urlopen', side_effect=urllib.error.URLError('timed out'))
+    def test_can_reach_youtube_returns_false_on_failure(self, _mock_urlopen):
+        self.assertFalse(tool.can_reach_youtube(timeout_seconds=1))
+
+    @mock.patch('bestpartners_tool.call_minimax', return_value='明显缩短后的结果')
+    def test_enhance_subtitle_chunk_with_minimax_falls_back_to_original_when_overcompressed(self, _mock_call):
+        chunk = '原始字幕内容非常长，需要保留足够信息量。' * 20
+        result = tool.enhance_subtitle_chunk_with_minimax(
+            title='测试标题',
+            chunk=chunk,
+            config=self.make_config(Path('/tmp')),
+            chunk_label='1/1',
+            max_chars=1800,
+        )
+        self.assertEqual(result, [chunk.strip()])
+
+    @mock.patch('bestpartners_tool.cleanup_temp_path')
+    @mock.patch('bestpartners_tool.transcribe_audio_with_asr')
+    @mock.patch('bestpartners_tool.capture_browser_audio')
+    def test_transcribe_video_with_asr_merges_multiple_chunks(self, mock_capture, mock_transcribe, _mock_cleanup):
+        audio1 = Path('/tmp/chunk1.webm')
+        audio2 = Path('/tmp/chunk2.webm')
+        mock_capture.side_effect = [
+            (audio1, 70.0, 45.0),
+            (audio2, 70.0, 70.0),
+        ]
+        mock_transcribe.side_effect = ['第一段', '第二段']
+
+        with mock.patch('bestpartners_tool.get_asr_capture_seconds', return_value=45), \
+             mock.patch('bestpartners_tool.get_asr_max_seconds', return_value=180), \
+             mock.patch('bestpartners_tool.can_reach_youtube', return_value=True):
+            merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
+
+        self.assertEqual(merged, '第一段 第二段')
+        self.assertEqual(mock_capture.call_count, 2)
+        self.assertEqual(mock_capture.call_args_list[0].kwargs['start_seconds'], 0.0)
+        self.assertEqual(mock_capture.call_args_list[1].kwargs['start_seconds'], 45.0)
+
+    @mock.patch('bestpartners_tool.capture_browser_audio')
+    def test_transcribe_video_with_asr_stops_when_youtube_unreachable(self, mock_capture):
+        with mock.patch('bestpartners_tool.can_reach_youtube', return_value=False):
+            merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
+
+        self.assertIsNone(merged)
+        mock_capture.assert_not_called()
+
+    @mock.patch('bestpartners_tool.subprocess.run')
+    def test_download_audio_with_ytdlp_returns_downloaded_file(self, mock_run):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_root = Path(tmpdir)
+            audio_path = work_root / 'abc-audio.webm'
+            audio_path.write_text('audio', encoding='utf-8')
+
+            mock_run.return_value = mock.Mock(returncode=0, stdout='', stderr='')
+            with mock.patch('bestpartners_tool.get_asr_work_root', return_value=work_root):
+                result = tool.download_audio_with_ytdlp(
+                    'https://www.youtube.com/watch?v=abc',
+                    'abc',
+                )
+
+        self.assertEqual(result, audio_path)
+        self.assertEqual(mock_run.call_args.args[0][0], 'yt-dlp')
+        self.assertIn('--no-playlist', mock_run.call_args.args[0])
+        self.assertIn('-f', mock_run.call_args.args[0])
+
+    @mock.patch('bestpartners_tool.cleanup_temp_path')
+    @mock.patch('bestpartners_tool.transcribe_audio_with_asr', return_value='全文')
+    @mock.patch('bestpartners_tool.download_audio_with_ytdlp')
+    @mock.patch('bestpartners_tool.capture_browser_audio', return_value=None)
+    def test_transcribe_video_with_asr_falls_back_to_ytdlp_audio(
+        self,
+        mock_capture,
+        mock_download,
+        mock_transcribe,
+        _mock_cleanup,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            audio_path = Path(tmpdir) / 'abc-audio.webm'
+            audio_path.write_text('audio', encoding='utf-8')
+            mock_download.return_value = audio_path
+
+            with mock.patch('bestpartners_tool.can_reach_youtube', return_value=True), \
+                 mock.patch('bestpartners_tool.get_asr_capture_seconds', return_value=45), \
+                 mock.patch('bestpartners_tool.get_asr_max_seconds', return_value=180):
+                merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
+
+        self.assertEqual(merged, '全文')
+        mock_capture.assert_called_once()
+        mock_download.assert_called_once_with('https://www.youtube.com/watch?v=abc', 'abc')
+        mock_transcribe.assert_called_once_with(audio_path)
+
+    @mock.patch('bestpartners_tool.time.sleep', return_value=None)
+    @mock.patch('bestpartners_tool.subprocess.run')
+    def test_capture_browser_audio_retries_after_timeout(self, mock_run, _mock_sleep):
+        timeout = subprocess.TimeoutExpired(cmd=['node'], timeout=120)
+        output_path_holder = {}
+
+        def run_side_effect(*args, **kwargs):
+            if not output_path_holder:
+                command = args[0]
+                script_path = Path(command[1])
+                output_path_holder['path'] = script_path.with_name('abc-001.webm')
+                raise timeout
+            output_path_holder['path'].write_text('audio', encoding='utf-8')
+            return mock.Mock(returncode=0, stdout=json.dumps({
+                'outPath': str(output_path_holder['path']),
+                'duration': 90.0,
+                'startTime': 45.0,
+                'endTime': 90.0,
+            }), stderr='')
+
+        mock_run.side_effect = run_side_effect
+
+        with tempfile.TemporaryDirectory() as tmpdir, \
+             mock.patch('bestpartners_tool.get_asr_work_root', return_value=Path(tmpdir)), \
+             mock.patch('bestpartners_tool.get_asr_capture_retries', return_value=2):
+            result = tool.capture_browser_audio(
+                video_url='https://www.youtube.com/watch?v=abc',
+                video_id='abc',
+                chunk_index=1,
+                start_seconds=45.0,
+                capture_seconds=45,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(mock_run.call_count, 2)
+        self.assertEqual(result[1], 90.0)
+        self.assertEqual(result[2], 90.0)
+
+    @mock.patch('bestpartners_tool.save_summary')
+    @mock.patch('bestpartners_tool.generate_summary', return_value='summary')
+    @mock.patch('bestpartners_tool.convert_subtitle_to_md', return_value='/tmp/subtitle.md')
+    @mock.patch('bestpartners_tool.enhance_subtitle_text', return_value='增强文本')
+    @mock.patch('bestpartners_tool.correct_asr_text', return_value='纠错文本')
+    @mock.patch('bestpartners_tool.transcribe_video_with_asr', return_value='原始转写')
+    @mock.patch('bestpartners_tool.translate_to_chinese', return_value='中文标题')
+    def test_process_video_with_asr_fallback_reuses_existing_post_pipeline(
+        self,
+        mock_translate,
+        _mock_transcribe_video,
+        mock_correct,
+        mock_enhance,
+        mock_convert,
+        mock_generate,
+        mock_save,
+    ):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = self.make_config(Path(tmpdir))
+            context = tool.build_channel_context('https://www.youtube.com/@tech-shrimp/videos', config, override_name='技术爬爬虾')
+            context.subtitles_dir.mkdir(parents=True, exist_ok=True)
+            context.summaries_dir.mkdir(parents=True, exist_ok=True)
+
+            success = tool.process_video_with_asr_fallback(
+                {'id': 'abc123', 'title': 'Original Title', 'upload_date': '20260318'},
+                context,
+                config,
+                glossary=Glossary(preferred_terms=['API'], alias_map={}, keep_original=[]),
+            )
+
+            self.assertTrue(success)
+            mock_translate.assert_called_once()
+            mock_correct.assert_called_once()
+            mock_enhance.assert_called_once_with('中文标题', '纠错文本', config)
+            mock_convert.assert_called_once()
+            self.assertEqual(mock_convert.call_args.args[3], 'asr-zh')
+            mock_generate.assert_called_once()
+            mock_save.assert_called_once()
 
 
 if __name__ == '__main__':

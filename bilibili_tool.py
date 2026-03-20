@@ -368,6 +368,23 @@ def download_subtitle(
     return str(subtitle_file) if subtitle_file else None
 
 
+def transcribe_video_with_asr(
+    video_url: str,
+    video_id: str,
+    cookies_file: Optional[str],
+    cookies_from_browser: Optional[str],
+) -> Optional[str]:
+    """下载音频并转写为文本，作为无字幕时的兜底。"""
+    audio_path = shared.download_audio_with_ytdlp(video_url, video_id, cookies_file, cookies_from_browser)
+    if not audio_path:
+        return None
+
+    try:
+        return shared.transcribe_audio_with_asr(audio_path)
+    finally:
+        shared.cleanup_temp_path(audio_path)
+
+
 def extract_subtitle_lines_from_text(content: str) -> List[str]:
     """从 VTT/SRT/LRC 等文本字幕中提取正文。"""
     lines: List[str] = []
@@ -688,8 +705,22 @@ def process_video(
 
     subtitles = get_available_subtitles(video_url, cookies_file, cookies_from_browser)
     if not subtitles:
-        print("   ⚠️ 无可用字幕；Bilibili 通常需要登录态 cookies。")
-        return False
+        print("   ⚠️ 无可用字幕，尝试 ASR 兜底")
+        if dry_run:
+            print("   🔍 预览模式，跳过 ASR 转写")
+            return True
+
+        asr_text = transcribe_video_with_asr(video_url, video_id, cookies_file, cookies_from_browser)
+        if not asr_text:
+            print("   ❌ ASR 转写失败")
+            return False
+
+        corrected_text = shared.correct_asr_text(chinese_title, asr_text, config)
+        formatted_subtitle_text = shared.enhance_subtitle_text(chinese_title, corrected_text, config)
+        convert_subtitle_to_md(video_url, chinese_title, formatted_subtitle_text, "asr-zh", context, publish_dates)
+        summary = generate_summary(chinese_title, video_url, video_id, formatted_subtitle_text, context, config, publish_dates)
+        save_summary(chinese_title, summary, context, publish_dates, existing_summary=existing_summary)
+        return True
 
     preferred_languages = ("zh-CN", "zh-Hans", "zh-Hant", "ai-zh", "en")
     lang = next((item for item in preferred_languages if item in subtitles), subtitles[0])

@@ -20,6 +20,7 @@ import re
 import sys
 import json
 import time
+import tempfile
 import argparse
 import subprocess
 import urllib.error
@@ -29,6 +30,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple
 
+from subscriptions import Glossary
+
 # 配置
 DEFAULT_CHANNEL = "https://www.youtube.com/@BestPartners/videos"
 DEFAULT_CHANNEL_NAME = "BestPartners"
@@ -36,7 +39,15 @@ DEFAULT_LIMIT = 10
 DEFAULT_BASE_DIR = Path("/Users/yangkai/Nutstore Files/mba/obsidian/第二大脑")
 DEFAULT_CONTENT_SUBDIR = "01-内容"
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.chat/v1"
-DEFAULT_MINIMAX_MODEL = "MiniMax-M2.5"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
+DEFAULT_ASR_BROWSER_EXECUTABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+DEFAULT_ASR_MODEL = "small"
+DEFAULT_ASR_CAPTURE_SECONDS = 45
+DEFAULT_ASR_WARMUP_SECONDS = 3
+DEFAULT_ASR_MAX_SECONDS = 1800
+DEFAULT_ASR_NAVIGATION_TIMEOUT_SECONDS = 60
+DEFAULT_ASR_CAPTURE_RETRIES = 2
+DEFAULT_ASR_NETWORK_TIMEOUT_SECONDS = 15
 
 
 @dataclass(frozen=True)
@@ -206,6 +217,22 @@ def find_existing_summary(video_id: str, context: ChannelContext) -> Optional[Pa
     return None
 
 
+def find_existing_subtitle(video_id: str, context: ChannelContext) -> Optional[Path]:
+    """按 source 元数据检查视频字幕是否已存在。"""
+    expected_source = f"source: https://www.youtube.com/watch?v={video_id}"
+
+    for subtitle_file in context.subtitles_dir.glob("*.md"):
+        try:
+            with open(subtitle_file, 'r', encoding='utf-8') as handle:
+                for line in handle:
+                    if line.strip() == expected_source:
+                        return subtitle_file
+        except OSError as error:
+            print(f"   ⚠️ 读取已有字幕失败: {subtitle_file.name} - {error}")
+
+    return None
+
+
 def run_command(cmd: List[str], capture: bool = True) -> str:
     """执行命令并返回输出"""
     try:
@@ -235,6 +262,112 @@ def build_cookie_args(cookies_file: Optional[str], cookies_from_browser: Optiona
     if cookies_from_browser:
         return ["--cookies-from-browser", cookies_from_browser]
     return []
+
+
+def get_env_int(name: str, default: int) -> int:
+    """读取整数环境变量，非法值时回退默认值。"""
+    raw = os.environ.get(name, '').strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def get_asr_work_root() -> Path:
+    """返回 ASR 临时工作目录。"""
+    raw = os.environ.get('YTSUBMD_ASR_WORK_DIR', '').strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path(tempfile.gettempdir()) / 'ytsubmd-asr'
+
+
+def get_asr_browser_executable() -> str:
+    """返回浏览器可执行文件路径。"""
+    return os.environ.get('YTSUBMD_BROWSER_EXECUTABLE', '').strip() or DEFAULT_ASR_BROWSER_EXECUTABLE
+
+
+def get_playwright_require_target() -> str:
+    """返回 Node require 的 playwright 模块路径。"""
+    return os.environ.get('YTSUBMD_PLAYWRIGHT_REQUIRE', '').strip() or 'playwright-core'
+
+
+def is_playwright_dependency_missing(error_output: str) -> bool:
+    """判断浏览器抓音失败是否由 playwright 依赖缺失引起。"""
+    normalized = error_output.lower()
+    return (
+        "cannot find module 'playwright-core'" in normalized
+        or 'cannot find module "playwright-core"' in normalized
+        or 'err_module_not_found' in normalized
+        or 'playwright-core' in normalized and 'module' in normalized and 'not found' in normalized
+    )
+
+
+def get_asr_python_executable() -> str:
+    """返回运行 faster-whisper 的 Python 解释器。"""
+    return os.environ.get('YTSUBMD_ASR_PYTHON', '').strip() or sys.executable
+
+
+def get_asr_model_name() -> str:
+    """返回默认 ASR 模型名。"""
+    return os.environ.get('YTSUBMD_ASR_MODEL', '').strip() or DEFAULT_ASR_MODEL
+
+
+def get_asr_capture_seconds() -> int:
+    """返回单段 ASR 抓音频时长。"""
+    return max(10, get_env_int('YTSUBMD_ASR_CAPTURE_SECONDS', DEFAULT_ASR_CAPTURE_SECONDS))
+
+
+def get_asr_max_seconds() -> int:
+    """返回单视频 ASR 最大处理时长，避免超长视频无限录制。"""
+    return max(get_asr_capture_seconds(), get_env_int('YTSUBMD_ASR_MAX_SECONDS', DEFAULT_ASR_MAX_SECONDS))
+
+
+def get_asr_navigation_timeout_seconds() -> int:
+    """返回浏览器访问 YouTube 页面时的超时时间。"""
+    return max(30, get_env_int('YTSUBMD_ASR_NAVIGATION_TIMEOUT_SECONDS', DEFAULT_ASR_NAVIGATION_TIMEOUT_SECONDS))
+
+
+def get_asr_capture_retries() -> int:
+    """返回单段浏览器抓音失败后的重试次数。"""
+    return max(1, get_env_int('YTSUBMD_ASR_CAPTURE_RETRIES', DEFAULT_ASR_CAPTURE_RETRIES))
+
+
+def get_asr_network_timeout_seconds() -> int:
+    """返回 YouTube 网络预检超时时间。"""
+    return max(5, get_env_int('YTSUBMD_ASR_NETWORK_TIMEOUT_SECONDS', DEFAULT_ASR_NETWORK_TIMEOUT_SECONDS))
+
+
+def can_reach_youtube(timeout_seconds: Optional[int] = None) -> bool:
+    """快速检查当前环境是否能访问 YouTube。"""
+    probe_url = os.environ.get('YTSUBMD_ASR_PROBE_URL', '').strip() or 'https://www.youtube.com/robots.txt'
+    request = urllib.request.Request(
+        probe_url,
+        headers={'User-Agent': 'Mozilla/5.0'},
+        method='GET',
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds or get_asr_network_timeout_seconds()) as response:
+            return int(getattr(response, 'status', 200) or 200) < 500
+    except urllib.error.URLError as error:
+        print(f"   ❌ YouTube 网络预检失败: {error.reason}")
+    except TimeoutError:
+        print("   ❌ YouTube 网络预检失败: timeout")
+    except OSError as error:
+        print(f"   ❌ YouTube 网络预检失败: {error}")
+    return False
+
+
+def cleanup_temp_path(path: Optional[Path]) -> None:
+    """删除临时文件。"""
+    if not path:
+        return
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError as error:
+        print(f"   ⚠️ 清理临时文件失败: {path} - {error}")
 
 
 def translate_to_chinese(title: str) -> str:
@@ -503,6 +636,7 @@ def convert_subtitle_to_md(
     lang: str,
     context: ChannelContext,
     publish_dates: Dict[str, str],
+    existing_subtitle: Optional[Path] = None,
 ) -> str:
     """将清洗后的字幕文本转换为 Markdown"""
     try:
@@ -529,6 +663,13 @@ created: {publish_dates['compact']}
         md_path = context.subtitles_dir / md_filename
         with open(md_path, 'w', encoding='utf-8') as handle:
             handle.write(md_content)
+
+        if existing_subtitle and existing_subtitle != md_path:
+            try:
+                existing_subtitle.unlink()
+                print(f"   🧹 已清理旧字幕文件: {existing_subtitle.name}")
+            except OSError as error:
+                print(f"   ⚠️ 清理旧字幕文件失败: {existing_subtitle.name} - {error}")
 
         print(f"   ✅ 字幕已保存为 Markdown: {md_filename}")
         return str(md_path)
@@ -586,6 +727,20 @@ tags:
 def strip_reasoning_markup(text: str) -> str:
     """移除模型返回中的推理片段"""
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
+
+
+def normalize_text_for_length_check(text: str) -> str:
+    """归一化文本，便于比较增强前后的信息量。"""
+    return re.sub(r'\s+', '', text).strip()
+
+
+def preserves_enough_content(original_text: str, enhanced_text: str, min_ratio: float = 0.7) -> bool:
+    """检查增强结果是否明显压缩了信息量。"""
+    original_normalized = normalize_text_for_length_check(original_text)
+    enhanced_normalized = normalize_text_for_length_check(enhanced_text)
+    if not original_normalized:
+        return True
+    return len(enhanced_normalized) >= len(original_normalized) * min_ratio
 
 
 def sanitize_summary_text(summary_text: str) -> str:
@@ -722,6 +877,437 @@ def call_minimax(
     return result_text
 
 
+def capture_browser_audio(
+    video_url: str,
+    video_id: str,
+    chunk_index: int = 0,
+    start_seconds: float = 0.0,
+    capture_seconds: Optional[int] = None,
+) -> Optional[Tuple[Path, float, float]]:
+    """使用浏览器播放页面中的 video 元素抓取一段音频。"""
+    work_dir = get_asr_work_root()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    script_path = work_dir / f'{video_id}-{chunk_index:03d}-capture-audio.js'
+    output_path = work_dir / f'{video_id}-{chunk_index:03d}.webm'
+
+    require_target = json.dumps(get_playwright_require_target())
+    browser_executable = json.dumps(get_asr_browser_executable())
+    effective_capture_seconds = capture_seconds or get_asr_capture_seconds()
+    timeout_seconds = max(120, effective_capture_seconds + 90)
+    navigation_timeout_ms = get_asr_navigation_timeout_seconds() * 1000
+    script = f"""const fs = require('fs');
+const {{ chromium }} = require({require_target});
+
+(async () => {{
+  const browser = await chromium.launch({{
+    executablePath: {browser_executable},
+    headless: true,
+    args: ['--autoplay-policy=no-user-gesture-required'],
+  }});
+  const page = await browser.newPage({{ viewport: {{ width: 1440, height: 1200 }} }});
+  page.setDefaultTimeout({navigation_timeout_ms});
+  page.setDefaultNavigationTimeout({navigation_timeout_ms});
+  try {{
+    await page.goto({json.dumps(video_url)}, {{ waitUntil: 'commit', timeout: {navigation_timeout_ms} }});
+    await page.waitForSelector('video', {{ timeout: {navigation_timeout_ms} }});
+    await page.waitForTimeout(8000);
+    const result = await page.evaluate(async (options) => {{
+      const video = document.querySelector('video');
+      if (!video) throw new Error('No video element');
+      const waitForMetadata = () => new Promise(resolve => {{
+        const finish = () => resolve();
+        if (video.readyState >= 1 && Number.isFinite(video.duration) && video.duration > 0) {{
+          finish();
+          return;
+        }}
+        video.addEventListener('loadedmetadata', finish, {{ once: true }});
+        setTimeout(finish, 5000);
+      }});
+      const waitForSeek = () => new Promise(resolve => {{
+        let done = false;
+        const finish = () => {{
+          if (!done) {{
+            done = true;
+            resolve();
+          }}
+        }};
+        video.addEventListener('seeked', finish, {{ once: true }});
+        setTimeout(finish, 1500);
+      }});
+      await waitForMetadata();
+      if (Number.isFinite(video.duration) && options.startSeconds > 0) {{
+        video.currentTime = Math.min(options.startSeconds, Math.max(0, video.duration - 0.25));
+        await waitForSeek();
+      }} else if (options.startSeconds > 0) {{
+        video.currentTime = options.startSeconds;
+        await waitForSeek();
+      }}
+      video.muted = false;
+      video.volume = 1.0;
+      try {{ await video.play(); }} catch (_error) {{}}
+      await new Promise(resolve => setTimeout(resolve, options.warmupMs));
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const actualStartTime = Number.isFinite(video.currentTime) ? video.currentTime : options.startSeconds;
+      const remainingMs = duration > 0 ? Math.max(0, (duration - video.currentTime) * 1000) : options.captureMs;
+      const actualCaptureMs = Math.max(1000, Math.min(options.captureMs, remainingMs || options.captureMs));
+      const getStreamWithAudio = async () => {{
+        for (let attempt = 0; attempt < 5; attempt += 1) {{
+          const candidate = video.captureStream();
+          if (candidate.getAudioTracks().length) {{
+            return candidate;
+          }}
+          try {{ await video.play(); }} catch (_error) {{}}
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }}
+        throw new Error('No audio tracks in captureStream');
+      }};
+      const stream = await getStreamWithAudio();
+      const audioTracks = stream.getAudioTracks();
+      const audioOnly = new MediaStream(audioTracks);
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
+      const recorder = new MediaRecorder(audioOnly, {{ mimeType }});
+      const chunks = [];
+      recorder.ondataavailable = event => {{ if (event.data && event.data.size) chunks.push(event.data); }};
+      recorder.start(1000);
+      await new Promise(resolve => setTimeout(resolve, actualCaptureMs));
+      recorder.stop();
+      await new Promise(resolve => recorder.onstop = resolve);
+      const blob = new Blob(chunks, {{ type: mimeType }});
+      const buffer = await blob.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {{
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+      }}
+      return {{
+        size: blob.size,
+        mimeType,
+        duration,
+        startTime: actualStartTime,
+        endTime: duration > 0 ? Math.min(duration, actualStartTime + actualCaptureMs / 1000) : actualStartTime + actualCaptureMs / 1000,
+        base64: btoa(binary),
+      }};
+    }}, {{
+      startSeconds: {start_seconds},
+      captureMs: {effective_capture_seconds * 1000},
+      warmupMs: {get_env_int('YTSUBMD_ASR_WARMUP_SECONDS', DEFAULT_ASR_WARMUP_SECONDS) * 1000},
+    }});
+    fs.writeFileSync({json.dumps(str(output_path))}, Buffer.from(result.base64, 'base64'));
+    console.log(JSON.stringify({{
+      outPath: {json.dumps(str(output_path))},
+      size: result.size,
+      mimeType: result.mimeType,
+      duration: result.duration,
+      startTime: result.startTime,
+      endTime: result.endTime,
+    }}));
+  }} finally {{
+    await browser.close();
+  }}
+}})().catch(error => {{
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+}});
+"""
+    try:
+        script_path.write_text(script, encoding='utf-8')
+        max_attempts = get_asr_capture_retries()
+        for attempt in range(1, max_attempts + 1):
+            try:
+                result = subprocess.run(
+                    ['node', str(script_path)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_seconds,
+                )
+            except FileNotFoundError:
+                print("   ❌ 缺少 node，无法执行浏览器音频抓取")
+                cleanup_temp_path(output_path)
+                return None
+            except subprocess.TimeoutExpired:
+                if attempt >= max_attempts:
+                    print("   ❌ 浏览器音频抓取超时")
+                    cleanup_temp_path(output_path)
+                    return None
+                print(f"   ⚠️ 浏览器音频抓取超时，准备重试 ({attempt}/{max_attempts})")
+                cleanup_temp_path(output_path)
+                time.sleep(3)
+                continue
+
+            if result.returncode != 0:
+                error_output = result.stderr.strip() or result.stdout.strip()
+                if is_playwright_dependency_missing(error_output):
+                    print("   ⚠️ 浏览器音频抓取依赖缺失，改用 yt-dlp 音频下载")
+                    cleanup_temp_path(output_path)
+                    return None
+                if attempt >= max_attempts:
+                    print(f"   ❌ 浏览器音频抓取失败: {error_output[:300]}")
+                    cleanup_temp_path(output_path)
+                    return None
+                print(f"   ⚠️ 浏览器音频抓取失败，准备重试 ({attempt}/{max_attempts}): {error_output[:160]}")
+                cleanup_temp_path(output_path)
+                time.sleep(3)
+                continue
+
+            try:
+                payload = json.loads(result.stdout.strip() or '{}')
+            except json.JSONDecodeError:
+                if attempt >= max_attempts:
+                    print("   ❌ 浏览器音频抓取返回值无法解析")
+                    cleanup_temp_path(output_path)
+                    return None
+                print(f"   ⚠️ 浏览器音频抓取返回值无法解析，准备重试 ({attempt}/{max_attempts})")
+                cleanup_temp_path(output_path)
+                time.sleep(3)
+                continue
+
+            audio_path = Path(str(payload.get('outPath', '')).strip() or output_path)
+            if not audio_path.is_file():
+                if attempt >= max_attempts:
+                    print("   ❌ 浏览器音频抓取未生成音频文件")
+                    return None
+                print(f"   ⚠️ 浏览器音频文件缺失，准备重试 ({attempt}/{max_attempts})")
+                time.sleep(3)
+                continue
+
+            duration = float(payload.get('duration', 0) or 0)
+            start_time = float(payload.get('startTime', start_seconds) or start_seconds)
+            end_time = float(payload.get('endTime', 0) or 0)
+            print(f"   🎙️ 已抓取浏览器音频分段 {chunk_index + 1}: {audio_path.name} ({start_time:.1f}s → {end_time:.1f}s)")
+            return audio_path, duration, end_time
+    finally:
+        cleanup_temp_path(script_path)
+
+    return None
+
+
+def download_audio_with_ytdlp(
+    video_url: str,
+    video_id: str,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+) -> Optional[Path]:
+    """直接用 yt-dlp 下载整段音频，作为浏览器抓音失败时的备用路径。"""
+    work_dir = get_asr_work_root()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output_base = work_dir / f'{video_id}-audio'
+
+    cmd = [
+        'yt-dlp',
+        *build_cookie_args(cookies_file, cookies_from_browser),
+        '--no-playlist',
+        '-f',
+        'bestaudio/best',
+        '--print',
+        'after_move:filepath',
+        '-o',
+        str(output_base),
+        video_url,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except FileNotFoundError:
+        print("   ❌ 缺少 yt-dlp，无法下载备用音频")
+        return None
+    except subprocess.TimeoutExpired:
+        print("   ❌ yt-dlp 音频下载超时")
+        return None
+
+    if result.returncode != 0:
+        error_output = result.stderr.strip() or result.stdout.strip()
+        print(f"   ❌ yt-dlp 音频下载失败: {error_output[:300]}")
+        return None
+
+    candidates = sorted(
+        [path for path in work_dir.glob(f'{video_id}-audio*') if path.is_file()],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if candidates:
+        print(f"   🎧 已下载备用音频: {candidates[0].name}")
+        return candidates[0]
+
+    for line in (result.stdout or '').splitlines()[::-1]:
+        candidate = Path(line.strip())
+        if candidate.is_file():
+            print(f"   🎧 已下载备用音频: {candidate.name}")
+            return candidate
+
+    print("   ❌ yt-dlp 音频下载完成但未找到输出文件")
+    return None
+
+
+def transcribe_audio_with_asr(audio_path: Path, model: Optional[str] = None, language: str = 'zh') -> Optional[str]:
+    """使用 faster-whisper 将音频转写为文本。"""
+    python_executable = get_asr_python_executable()
+    model_name = model or get_asr_model_name()
+    code = r"""
+import json
+import sys
+from faster_whisper import WhisperModel
+
+audio_path = sys.argv[1]
+model_name = sys.argv[2]
+language = sys.argv[3]
+model = WhisperModel(model_name, device='cpu', compute_type='int8')
+segments, _info = model.transcribe(audio_path, language=language, vad_filter=True)
+result = [segment.text.strip() for segment in segments if segment.text.strip()]
+print(json.dumps(result, ensure_ascii=False))
+"""
+    try:
+        result = subprocess.run(
+            [python_executable, '-c', code, str(audio_path), model_name, language],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except FileNotFoundError:
+        print(f"   ❌ 找不到 ASR Python 解释器: {python_executable}")
+        return None
+    except subprocess.TimeoutExpired:
+        print("   ❌ ASR 转写超时")
+        return None
+
+    if result.returncode != 0:
+        error_output = result.stderr.strip() or result.stdout.strip()
+        print(f"   ❌ ASR 转写失败: {error_output[:300]}")
+        return None
+
+    try:
+        parts = json.loads(result.stdout.strip() or '[]')
+    except json.JSONDecodeError:
+        print("   ❌ ASR 转写结果无法解析")
+        return None
+
+    text = ' '.join(str(item).strip() for item in parts if str(item).strip()).strip()
+    if not text:
+        print("   ❌ ASR 转写为空")
+        return None
+    print(f"   🧠 已完成 ASR 转写（{model_name}）")
+    return text
+
+
+def transcribe_video_with_asr(video_url: str, video_id: str) -> Optional[str]:
+    """分段抓取整段视频音频并拼接 ASR 转写。"""
+    if not can_reach_youtube():
+        print("   ❌ 当前环境无法访问 YouTube，跳过 ASR 抓音")
+        return None
+
+    chunk_seconds = get_asr_capture_seconds()
+    max_seconds = get_asr_max_seconds()
+    current_start = 0.0
+    known_duration = 0.0
+    parts: List[str] = []
+    chunk_index = 0
+
+    while current_start < max_seconds:
+        captured = capture_browser_audio(
+            video_url,
+            video_id,
+            chunk_index=chunk_index,
+            start_seconds=current_start,
+            capture_seconds=chunk_seconds,
+        )
+        if not captured:
+            if not parts and chunk_index == 0:
+                fallback_audio = download_audio_with_ytdlp(video_url, video_id)
+                if fallback_audio:
+                    try:
+                        fallback_text = transcribe_audio_with_asr(fallback_audio)
+                    finally:
+                        cleanup_temp_path(fallback_audio)
+                    if fallback_text:
+                        return fallback_text
+            break
+
+        audio_path, duration, end_time = captured
+        if duration > 0:
+            known_duration = duration
+
+        try:
+            text = transcribe_audio_with_asr(audio_path)
+        finally:
+            cleanup_temp_path(audio_path)
+
+        if text:
+            parts.append(text)
+
+        if known_duration and end_time >= known_duration - 0.5:
+            break
+
+        next_start = end_time if end_time > current_start + 0.5 else current_start + chunk_seconds
+        if next_start <= current_start + 0.5:
+            break
+
+        current_start = next_start
+        chunk_index += 1
+
+        if known_duration and current_start >= known_duration:
+            break
+
+    full_text = ' '.join(part.strip() for part in parts if part.strip()).strip()
+    if not full_text:
+        print("   ❌ 整段 ASR 转写为空")
+        return None
+    print(f"   🧾 已拼接 {len(parts)} 段 ASR 转写")
+    return full_text
+
+
+def build_glossary_hint(glossary: Optional[Glossary]) -> str:
+    """将 Glossary 渲染成稳定的 prompt 片段。"""
+    if glossary:
+        return glossary.to_prompt_hint()
+    return "频道术语：\n- 无\n\n常见纠错：\n- 无\n\n保守规则：\n- 不确定时保留原词"
+
+
+def correct_asr_text(
+    title: str,
+    asr_text: str,
+    config: AppConfig,
+    glossary: Optional[Glossary] = None,
+) -> str:
+    """对 ASR 文本做轻量纠错与规范化。"""
+    prompt = f"""请将以下 ASR 自动转写文本整理成适合阅读的中文字幕正文。
+
+要求：
+1. 只做纠错与整理：修正明显的同音/近音识别错误、补全标点、修正断句、统一中英文大小写与空格。
+2. 严格保留原意，不要总结、不要删减关键事实、不要新增信息。
+3. 保持原有叙述顺序。
+4. 输出纯正文段落，不要标题、不要列表、不要说明、不要 <think>。
+5. 遇到明显的产品名、品牌名、术语、人名时，优先按“术语提示”纠正。
+6. 如果某个词无法确定，保留原词或使用最保守写法，不要强行猜测。
+7. 只处理当前文本本身，不要补写上下文。
+
+视频标题：{title}
+
+术语提示：
+{build_glossary_hint(glossary)}
+
+ASR 文本：
+{asr_text}
+"""
+    corrected = call_minimax(
+        prompt=prompt,
+        config=config,
+        system_prompt='你是一个专业的中文视频字幕校对编辑。',
+        max_tokens=2200,
+        temperature=0.1,
+        timeout=120,
+    )
+    if corrected:
+        print("   ✍️ 已完成 ASR 纠错")
+        return corrected.strip()
+    print("   ⚠️ ASR 纠错不可用，使用原始转写文本")
+    return asr_text
+
+
 def enhance_subtitle_chunk_with_minimax(
     title: str,
     chunk: str,
@@ -756,7 +1342,11 @@ def enhance_subtitle_chunk_with_minimax(
         timeout=120,
     )
     if enhanced_chunk:
-        return [enhanced_chunk.strip()]
+        enhanced_chunk = enhanced_chunk.strip()
+        if preserves_enough_content(chunk, enhanced_chunk):
+            return [enhanced_chunk]
+        print(f"   ⚠️ 片段 {chunk_label} 增强后信息量缩水明显，保留原始片段")
+        return [chunk.strip()]
 
     if len(chunk) <= 800:
         return None
@@ -1005,7 +1595,14 @@ tags:
     return summary
 
 
-def save_summary(title: str, video_id: str, content: str, context: ChannelContext, publish_dates: Dict[str, str]) -> str:
+def save_summary(
+    title: str,
+    video_id: str,
+    content: str,
+    context: ChannelContext,
+    publish_dates: Dict[str, str],
+    existing_summary: Optional[Path] = None,
+) -> str:
     """保存摘要文件"""
     safe_title = sanitize_filename(title)
     # 格式：标题-日期.md
@@ -1016,11 +1613,82 @@ def save_summary(title: str, video_id: str, content: str, context: ChannelContex
     try:
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
+        if existing_summary and existing_summary != filepath:
+            try:
+                existing_summary.unlink()
+                print(f"   🧹 已清理旧摘要文件: {existing_summary.name}")
+            except OSError as error:
+                print(f"   ⚠️ 清理旧摘要文件失败: {existing_summary.name} - {error}")
         print(f"   ✅ 摘要已保存: {filename}")
         return str(filepath)
     except Exception as e:
         print(f"   ❌ 保存失败: {e}")
         return ""
+
+
+def process_video_with_asr_fallback(
+    video: Dict,
+    context: ChannelContext,
+    config: AppConfig,
+    dry_run: bool = False,
+    force: bool = False,
+    glossary: Optional[Glossary] = None,
+    cookies_file: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+) -> bool:
+    """处理需要走浏览器音频 + ASR 兜底的视频。"""
+    video_id = video['id']
+    title = video['title']
+    publish_dates = get_video_dates(video.get('upload_date', ''))
+    video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    print(f"\n📹 处理（ASR 兜底）: {title}")
+
+    chinese_title = translate_to_chinese(title)
+    if chinese_title != title:
+        print(f"   📝 翻译: {title} → {chinese_title}")
+    else:
+        print("   📝 使用原标题")
+
+    existing_summary = find_existing_summary(video_id, context)
+    existing_subtitle = find_existing_subtitle(video_id, context)
+    if existing_summary and not force:
+        print(f"   ⏭️ 已存在，跳过: {existing_summary.name}")
+        return False
+    if existing_summary and force:
+        print(f"   ♻️ 已存在，按 --force 重新处理: {existing_summary.name}")
+
+    if dry_run:
+        print("   🔍 预览模式，跳过 ASR 音频抓取")
+        return True
+
+    asr_text = transcribe_video_with_asr(video_url, video_id)
+    if not asr_text and (cookies_file or cookies_from_browser):
+        print("   ⚠️ 浏览器抓音失败，尝试使用 cookies 下载备用音频")
+        fallback_audio = download_audio_with_ytdlp(video_url, video_id, cookies_file, cookies_from_browser)
+        if fallback_audio:
+            try:
+                asr_text = transcribe_audio_with_asr(fallback_audio)
+            finally:
+                cleanup_temp_path(fallback_audio)
+    if not asr_text:
+        return False
+
+    corrected_text = correct_asr_text(chinese_title, asr_text, config, glossary)
+    formatted_subtitle_text = enhance_subtitle_text(chinese_title, corrected_text, config)
+    convert_subtitle_to_md(
+        video_id,
+        chinese_title,
+        formatted_subtitle_text,
+        'asr-zh',
+        context,
+        publish_dates,
+        existing_subtitle=existing_subtitle,
+    )
+
+    summary = generate_summary(chinese_title, video_id, formatted_subtitle_text, context, config, publish_dates)
+    save_summary(chinese_title, video_id, summary, context, publish_dates, existing_summary=existing_summary)
+    return True
 
 
 def process_video(
@@ -1048,6 +1716,7 @@ def process_video(
 
     # 检查是否已处理（按视频 source 元数据检查）
     existing_summary = find_existing_summary(video_id, context)
+    existing_subtitle = find_existing_subtitle(video_id, context)
     if existing_summary and not force:
         print(f"   ⏭️ 已存在，跳过: {existing_summary.name}")
         return False
@@ -1096,13 +1765,21 @@ def process_video(
     formatted_subtitle_text = enhance_subtitle_text(chinese_title, subtitle_text, config)
 
     # 字幕输出阶段：将增强后的文本保存为 Markdown
-    convert_subtitle_to_md(video_id, chinese_title, formatted_subtitle_text, subtitle_option.code, context, publish_dates)
+    convert_subtitle_to_md(
+        video_id,
+        chinese_title,
+        formatted_subtitle_text,
+        subtitle_option.code,
+        context,
+        publish_dates,
+        existing_subtitle=existing_subtitle,
+    )
 
     # 生成摘要（使用增强后的字幕文本）
     summary = generate_summary(chinese_title, video_id, formatted_subtitle_text, context, config, publish_dates)
 
     # 保存（使用中文标题）
-    save_summary(chinese_title, video_id, summary, context, publish_dates)
+    save_summary(chinese_title, video_id, summary, context, publish_dates, existing_summary=existing_summary)
 
     return True
 
