@@ -1,4 +1,4 @@
-# youtube-submd / bestpartners_tool
+# youtube-submd / youtumd
 
 ## 1. 项目概述
 
@@ -6,7 +6,7 @@
 
 这是一个用于 **从 YouTube 频道抓取最新视频字幕并生成摘要** 的命令行工具。
 
-当前实现已经从最初的 BestPartners 专用脚本，演进为一个 **支持频道跟踪的通用字幕摘要工具**：
+当前实现已经从最初的频道专用脚本，演进为一个 **支持频道跟踪的通用字幕摘要工具**：
 
 - 可抓取指定频道最新视频
 - 可下载并清洗字幕
@@ -119,25 +119,25 @@
 
 ```bash
 # 默认运行（使用默认频道与默认输出目录）
-python3 bestpartners_tool.py
+python3 youtumd.py
 
 # 预览模式（不下载字幕）
-python3 bestpartners_tool.py --dry-run
+python3 youtumd.py --dry-run
 
 # 指定处理数量
-python3 bestpartners_tool.py --limit 5
+python3 youtumd.py --limit 5
 
 # 处理其他频道
-python3 bestpartners_tool.py --channel "https://www.youtube.com/@其他频道/videos"
+python3 youtumd.py --channel "https://www.youtube.com/@其他频道/videos"
 
 # 强制重新处理已存在的视频
-python3 bestpartners_tool.py --force
+python3 youtumd.py --force
 
 # 覆盖输出根目录
-python3 bestpartners_tool.py --base-dir "/path/to/vault"
+python3 youtumd.py --base-dir "/path/to/vault"
 
 # 覆盖内容子目录
-python3 bestpartners_tool.py --content-subdir "01-内容"
+python3 youtumd.py --content-subdir "01-内容"
 ```
 
 ---

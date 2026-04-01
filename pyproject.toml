@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtube-submd"
+version = "0.3.0"
+description = "YouTube subtitle and summary tooling with API MVP foundation"
+readme = "youtumd_README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "celery>=5.4,<6",
+  "dashscope>=1.20,<2",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic>=2.10,<3",
+  "PyYAML>=6,<7",
+  "redis>=5.2,<6",
+  "SQLAlchemy>=2.0,<3",
+  "uvicorn[standard]>=0.35,<1",
+  "yt-dlp>=2025.2.19",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+youtumd-tool = "youtumd:main"
+bilibili-tool = "bilibili_tool:main"
+subscription-runner = "subscription_runner:main"
+status-view = "status_view:main"
+
+[tool.setuptools]
+py-modules = [
+  "youtumd",
+  "bilibili_tool",
+  "platform_adapters",
+  "scheduler",
+  "status_view",
+  "subscription_runner",
+  "subscription_status",
+  "subscriptions",
+]
+
+[tool.setuptools.packages.find]
+include = ["api*", "config*", "workers*", "storage*"]

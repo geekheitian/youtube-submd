@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Protocol
 
-import bestpartners_tool as youtube_tool
+import youtumd as youtube_tool
 import bilibili_tool
 from subscriptions import Subscription
 

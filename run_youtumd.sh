@@ -6,5 +6,5 @@ BASE_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$BASE_DIR"
 
-# 默认获取 BestPartners 最新视频
-python3 "$SCRIPT_DIR/bestpartners_tool.py" "$@"
+# 默认获取频道最新视频
+python3 "$SCRIPT_DIR/youtumd.py" "$@"

@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-import bestpartners_tool as tool
+import youtumd as tool
 from subscriptions import Glossary
 
 
@@ -153,7 +153,7 @@ en English vtt
             self.assertIn('channel: BestPartners', markdown)
             self.assertIn('channel_url: https://www.youtube.com/@BestPartners/videos', markdown)
             self.assertIn('author: @BestPartners', markdown)
-            self.assertIn('## 结构化摘要', markdown)
+            self.assertIn('### 核心主题', markdown)
             self.assertIn('MiniMax-M2.5', markdown)
             self.assertIn('published: 2026-03-01', markdown)
 
@@ -239,8 +239,8 @@ en English vtt
         self.assertNotIn('让我整理笔记内容', cleaned)
         self.assertIn('### 可行动点', cleaned)
 
-    @mock.patch('bestpartners_tool.time.sleep', return_value=None)
-    @mock.patch('bestpartners_tool.subprocess.run')
+    @mock.patch('youtumd.time.sleep', return_value=None)
+    @mock.patch('youtumd.subprocess.run')
     def test_download_subtitle_retries_on_429_for_auto_subs(self, mock_run, _mock_sleep):
         first = mock.Mock(returncode=1, stdout='', stderr='ERROR: Unable to download video subtitles: HTTP Error 429: Too Many Requests')
         second = mock.Mock(returncode=0, stdout='Writing video subtitles', stderr='')
@@ -268,7 +268,7 @@ en English vtt
             self.assertEqual(mock_run.call_args_list[0].args[0][1], '--write-auto-subs')
             self.assertEqual(mock_run.call_count, 2)
 
-    @mock.patch('bestpartners_tool.call_minimax')
+    @mock.patch('youtumd.call_minimax')
     def test_correct_asr_text_includes_glossary_hint(self, mock_call_minimax):
         mock_call_minimax.return_value = '纠错后的文本'
         glossary = Glossary(
@@ -288,18 +288,18 @@ en English vtt
         self.assertFalse(tool.preserves_enough_content(original, shortened))
         self.assertTrue(tool.preserves_enough_content(original, original))
 
-    @mock.patch('bestpartners_tool.urllib.request.urlopen')
+    @mock.patch('youtumd.urllib.request.urlopen')
     def test_can_reach_youtube_returns_true_on_success(self, mock_urlopen):
         mock_response = mock.MagicMock()
         mock_response.status = 200
         mock_urlopen.return_value.__enter__.return_value = mock_response
         self.assertTrue(tool.can_reach_youtube(timeout_seconds=1))
 
-    @mock.patch('bestpartners_tool.urllib.request.urlopen', side_effect=urllib.error.URLError('timed out'))
+    @mock.patch('youtumd.urllib.request.urlopen', side_effect=urllib.error.URLError('timed out'))
     def test_can_reach_youtube_returns_false_on_failure(self, _mock_urlopen):
         self.assertFalse(tool.can_reach_youtube(timeout_seconds=1))
 
-    @mock.patch('bestpartners_tool.call_minimax', return_value='明显缩短后的结果')
+    @mock.patch('youtumd.call_minimax', return_value='明显缩短后的结果')
     def test_enhance_subtitle_chunk_with_minimax_falls_back_to_original_when_overcompressed(self, _mock_call):
         chunk = '原始字幕内容非常长，需要保留足够信息量。' * 20
         result = tool.enhance_subtitle_chunk_with_minimax(
@@ -311,9 +311,9 @@ en English vtt
         )
         self.assertEqual(result, [chunk.strip()])
 
-    @mock.patch('bestpartners_tool.cleanup_temp_path')
-    @mock.patch('bestpartners_tool.transcribe_audio_with_asr')
-    @mock.patch('bestpartners_tool.capture_browser_audio')
+    @mock.patch('youtumd.cleanup_temp_path')
+    @mock.patch('youtumd.transcribe_audio_with_asr')
+    @mock.patch('youtumd.capture_browser_audio')
     def test_transcribe_video_with_asr_merges_multiple_chunks(self, mock_capture, mock_transcribe, _mock_cleanup):
         audio1 = Path('/tmp/chunk1.webm')
         audio2 = Path('/tmp/chunk2.webm')
@@ -323,9 +323,9 @@ en English vtt
         ]
         mock_transcribe.side_effect = ['第一段', '第二段']
 
-        with mock.patch('bestpartners_tool.get_asr_capture_seconds', return_value=45), \
-             mock.patch('bestpartners_tool.get_asr_max_seconds', return_value=180), \
-             mock.patch('bestpartners_tool.can_reach_youtube', return_value=True):
+        with mock.patch('youtumd.get_asr_capture_seconds', return_value=45), \
+             mock.patch('youtumd.get_asr_max_seconds', return_value=180), \
+             mock.patch('youtumd.can_reach_youtube', return_value=True):
             merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
 
         self.assertEqual(merged, '第一段 第二段')
@@ -333,15 +333,15 @@ en English vtt
         self.assertEqual(mock_capture.call_args_list[0].kwargs['start_seconds'], 0.0)
         self.assertEqual(mock_capture.call_args_list[1].kwargs['start_seconds'], 45.0)
 
-    @mock.patch('bestpartners_tool.capture_browser_audio')
+    @mock.patch('youtumd.capture_browser_audio')
     def test_transcribe_video_with_asr_stops_when_youtube_unreachable(self, mock_capture):
-        with mock.patch('bestpartners_tool.can_reach_youtube', return_value=False):
+        with mock.patch('youtumd.can_reach_youtube', return_value=False):
             merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
 
         self.assertIsNone(merged)
         mock_capture.assert_not_called()
 
-    @mock.patch('bestpartners_tool.subprocess.run')
+    @mock.patch('youtumd.subprocess.run')
     def test_download_audio_with_ytdlp_returns_downloaded_file(self, mock_run):
         with tempfile.TemporaryDirectory() as tmpdir:
             work_root = Path(tmpdir)
@@ -349,7 +349,7 @@ en English vtt
             audio_path.write_text('audio', encoding='utf-8')
 
             mock_run.return_value = mock.Mock(returncode=0, stdout='', stderr='')
-            with mock.patch('bestpartners_tool.get_asr_work_root', return_value=work_root):
+            with mock.patch('youtumd.get_asr_work_root', return_value=work_root):
                 result = tool.download_audio_with_ytdlp(
                     'https://www.youtube.com/watch?v=abc',
                     'abc',
@@ -360,10 +360,10 @@ en English vtt
         self.assertIn('--no-playlist', mock_run.call_args.args[0])
         self.assertIn('-f', mock_run.call_args.args[0])
 
-    @mock.patch('bestpartners_tool.cleanup_temp_path')
-    @mock.patch('bestpartners_tool.transcribe_audio_with_asr', return_value='全文')
-    @mock.patch('bestpartners_tool.download_audio_with_ytdlp')
-    @mock.patch('bestpartners_tool.capture_browser_audio', return_value=None)
+    @mock.patch('youtumd.cleanup_temp_path')
+    @mock.patch('youtumd.transcribe_audio_with_asr', return_value='全文')
+    @mock.patch('youtumd.download_audio_with_ytdlp')
+    @mock.patch('youtumd.capture_browser_audio', return_value=None)
     def test_transcribe_video_with_asr_falls_back_to_ytdlp_audio(
         self,
         mock_capture,
@@ -376,9 +376,9 @@ en English vtt
             audio_path.write_text('audio', encoding='utf-8')
             mock_download.return_value = audio_path
 
-            with mock.patch('bestpartners_tool.can_reach_youtube', return_value=True), \
-                 mock.patch('bestpartners_tool.get_asr_capture_seconds', return_value=45), \
-                 mock.patch('bestpartners_tool.get_asr_max_seconds', return_value=180):
+            with mock.patch('youtumd.can_reach_youtube', return_value=True), \
+                 mock.patch('youtumd.get_asr_capture_seconds', return_value=45), \
+                 mock.patch('youtumd.get_asr_max_seconds', return_value=180):
                 merged = tool.transcribe_video_with_asr('https://www.youtube.com/watch?v=abc', 'abc')
 
         self.assertEqual(merged, '全文')
@@ -386,8 +386,8 @@ en English vtt
         mock_download.assert_called_once_with('https://www.youtube.com/watch?v=abc', 'abc')
         mock_transcribe.assert_called_once_with(audio_path)
 
-    @mock.patch('bestpartners_tool.time.sleep', return_value=None)
-    @mock.patch('bestpartners_tool.subprocess.run')
+    @mock.patch('youtumd.time.sleep', return_value=None)
+    @mock.patch('youtumd.subprocess.run')
     def test_capture_browser_audio_retries_after_timeout(self, mock_run, _mock_sleep):
         timeout = subprocess.TimeoutExpired(cmd=['node'], timeout=120)
         output_path_holder = {}
@@ -409,8 +409,8 @@ en English vtt
         mock_run.side_effect = run_side_effect
 
         with tempfile.TemporaryDirectory() as tmpdir, \
-             mock.patch('bestpartners_tool.get_asr_work_root', return_value=Path(tmpdir)), \
-             mock.patch('bestpartners_tool.get_asr_capture_retries', return_value=2):
+             mock.patch('youtumd.get_asr_work_root', return_value=Path(tmpdir)), \
+             mock.patch('youtumd.get_asr_capture_retries', return_value=2):
             result = tool.capture_browser_audio(
                 video_url='https://www.youtube.com/watch?v=abc',
                 video_id='abc',
@@ -424,13 +424,13 @@ en English vtt
         self.assertEqual(result[1], 90.0)
         self.assertEqual(result[2], 90.0)
 
-    @mock.patch('bestpartners_tool.save_summary')
-    @mock.patch('bestpartners_tool.generate_summary', return_value='summary')
-    @mock.patch('bestpartners_tool.convert_subtitle_to_md', return_value='/tmp/subtitle.md')
-    @mock.patch('bestpartners_tool.enhance_subtitle_text', return_value='增强文本')
-    @mock.patch('bestpartners_tool.correct_asr_text', return_value='纠错文本')
-    @mock.patch('bestpartners_tool.transcribe_video_with_asr', return_value='原始转写')
-    @mock.patch('bestpartners_tool.translate_to_chinese', return_value='中文标题')
+    @mock.patch('youtumd.save_summary')
+    @mock.patch('youtumd.generate_summary', return_value='summary')
+    @mock.patch('youtumd.convert_subtitle_to_md', return_value='/tmp/subtitle.md')
+    @mock.patch('youtumd.enhance_subtitle_text', return_value='增强文本')
+    @mock.patch('youtumd.correct_asr_text', return_value='纠错文本')
+    @mock.patch('youtumd.transcribe_video_with_asr', return_value='原始转写')
+    @mock.patch('youtumd.translate_to_chinese', return_value='中文标题')
     def test_process_video_with_asr_fallback_reuses_existing_post_pipeline(
         self,
         mock_translate,

@@ -23,7 +23,7 @@ echo "==================================================" >> "$LOG_FILE"
 # 4. 运行 Python 脚本
 #    使用 --limit 5 检查最新视频
 #    使用 --no-color 避免日志中出现乱码 (如果脚本支持的话，目前脚本没这个参数，忽略)
-/opt/homebrew/bin/python3 bestpartners_tool.py --limit 5 >> "$LOG_FILE" 2>&1
+/opt/homebrew/bin/python3 youtumd.py --limit 5 >> "$LOG_FILE" 2>&1
 
 EXIT_CODE=$?
 

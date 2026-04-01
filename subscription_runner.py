@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import bestpartners_tool as shared
+import youtumd as shared
 from platform_adapters import get_adapter
 from subscription_status import STATUS_HTML_PATH, STATUS_JSON_PATH, load_status, write_status, write_status_html
 from subscriptions import Subscription, load_subscriptions

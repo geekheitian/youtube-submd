@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import bestpartners_tool as tool
+import youtumd as tool
 import platform_adapters
 from subscriptions import Glossary, Subscription
 

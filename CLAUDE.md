@@ -8,28 +8,28 @@ This is the `04-工具/` (Tools) directory within the larger **第二大脑** (S
 
 ## Tools Overview
 
-### BestPartners Video Summary Tool
+### youtumd - YouTube Video Summary Tool
 
-**Purpose**: Automate fetching YouTube @BestPartners channel videos, extract subtitles, generate AI summaries, and store in Obsidian.
+**Purpose**: Automate fetching YouTube channel videos, extract subtitles, generate AI summaries, and store in Obsidian.
 
-**Main file**: `bestpartners_tool.py`
+**Main file**: `youtumd.py`
 
 **Usage**:
 ```bash
 # Default: process 10 videos
-python3 bestpartners_tool.py
+python3 youtumd.py
 
 # Preview mode (no subtitle download)
-python3 bestpartners_tool.py --dry-run
+python3 youtumd.py --dry-run
 
 # Process specific number
-python3 bestpartners_tool.py --limit 5
+python3 youtumd.py --limit 5
 
 # Other channel
-python3 bestpartners_tool.py --channel "https://www.youtube.com/@其他频道/videos"
+python3 youtumd.py --channel "https://www.youtube.com/@其他频道/videos"
 
 # Force reprocess
-python3 bestpartners_tool.py --force
+python3 youtumd.py --force
 ```
 
 **Dependencies**:
@@ -43,17 +43,17 @@ python3 bestpartners_tool.py --force
 
 ## Shell Scripts
 
-- `bestpartners_tool.sh` - Wrapper script for the tool
-- `run_bestpartners.sh` - Another wrapper
+- `youtumd.sh` - Wrapper script for the tool
+- `run_youtumd.sh` - Another wrapper
 
 ## Directory Structure
 
 ```
-04-工具/
-├── bestpartners_tool.py       # Main Python tool
-├── bestpartners_tool.sh       # Shell wrapper
-├── run_bestpartners.sh        # Alternative wrapper
-└── bestpartners_tool_README.md  # Detailed documentation
+youtumd/
+├── youtumd.py                 # Main Python tool
+├── youtumd.sh                 # Shell wrapper
+├── run_youtumd.sh            # Alternative wrapper
+└── youtumd_README.md         # Detailed documentation
 ```
 
 ## Key Implementation Details
@@ -67,7 +67,7 @@ python3 bestpartners_tool.py --force
 ## Code Architecture
 
 ```
-bestpartners_tool.py
+youtumd.py
 ├── get_channel_videos()      # Fetch video list from channel
 ├── get_available_subtitles()  # Check available subtitle languages
 ├── download_subtitle()       # Download VTT subtitle

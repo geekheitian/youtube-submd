@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import bestpartners_tool as shared
+import youtumd as shared
 
 
 DEFAULT_SPACE_URL = "https://space.bilibili.com/50247550/video"
